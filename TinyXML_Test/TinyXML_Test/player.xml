@@ -1,0 +1,3 @@
+<Player name="Alex" health="100">
+    <Inventory>Pistol, Medkit, Ammo</Inventory>
+</Player>

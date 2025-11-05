@@ -1,0 +1,59 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "G:\\git\\COMP3000\\TinyXML_Test\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{3198822B-227D-4800-8479-5F8F29DBF726}|TinyXML_Test\\TinyXML_Test.vcxproj|G:\\git\\COMP3000\\TinyXML_Test\\TinyXML_Test\\TinyXML_Test.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{3198822B-227D-4800-8479-5F8F29DBF726}|TinyXML_Test\\TinyXML_Test.vcxproj|solutionrelative:TinyXML_Test\\TinyXML_Test.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 1,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedHeight": 313,
+          "SelectedChildIndex": -1,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{3ae79031-e1bc-11d0-8f78-00a0c9110057}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{1c64b9c2-e352-428e-a56d-0ace190b99a6}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:128:0:{116d2292-e37d-41cd-a077-ebacac4c8cc4}"
+            }
+          ]
+        },
+        {
+          "DockedHeight": 87,
+          "SelectedChildIndex": 1,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{34e76e81-ee4a-11d0-ae2e-00a0c90fffc3}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "TinyXML_Test.cpp",
+              "DocumentMoniker": "G:\\git\\COMP3000\\TinyXML_Test\\TinyXML_Test\\TinyXML_Test.cpp",
+              "RelativeDocumentMoniker": "TinyXML_Test\\TinyXML_Test.cpp",
+              "ToolTip": "G:\\git\\COMP3000\\TinyXML_Test\\TinyXML_Test\\TinyXML_Test.cpp",
+              "RelativeToolTip": "TinyXML_Test\\TinyXML_Test.cpp",
+              "ViewState": "AgIAAAsAAAAAAAAAAAAmwCAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2025-11-05T22:54:41.736Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
