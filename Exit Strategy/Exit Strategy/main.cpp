@@ -76,7 +76,7 @@ inline AABB boxFromTS(const glm::vec3& t, const glm::vec3& s) { return AABB{ t -
 
 // ---------- NPC ----------
 struct NPC {
-    glm::vec3 pos{ 3.0f, 1.0f, -6.0f };     // center for interaction / collision
+    glm::vec3 pos{ 3.0f, 1.0f, -6.0f };
     glm::vec3 half{ 0.7f, 1.2f, 0.7f };
     bool talking = false;
     int  line = 0;
@@ -385,7 +385,7 @@ void drawTextScreen(const std::string& text,
     float x, float y,
     int fbw, int fbh,
     const glm::vec3& color,
-    float scale = 1.0f)   // <-- new param
+    float scale = 1.0f)
 {
     if (text.empty()) return;
 
@@ -644,25 +644,30 @@ void resolveXZ(const glm::vec3& oldPos, glm::vec3& newPos,
     const std::vector<AABB>& boxes, float radius)
 {
     glm::vec3 tmp = newPos;
+
     float dx = newPos.x - oldPos.x;
     for (const auto& b : boxes) {
         float minX = b.min.x - radius, maxX = b.max.x + radius;
         float minZ = b.min.z - radius, maxZ = b.max.z + radius;
+
         if (tmp.z > minZ && tmp.z < maxZ) {
             if (dx > 0 && oldPos.x <= minX && tmp.x > minX) tmp.x = minX;
             if (dx < 0 && oldPos.x >= maxX && tmp.x < maxX) tmp.x = maxX;
         }
     }
+
     float dz = newPos.z - oldPos.z;
     glm::vec3 tmp2 = tmp;
     for (const auto& b : boxes) {
         float minX = b.min.x - radius, maxX = b.max.x + radius;
         float minZ = b.min.z - radius, maxZ = b.max.z + radius;
+
         if (tmp2.x > minX && tmp2.x < maxX) {
             if (dz > 0 && oldPos.z <= minZ && tmp2.z > minZ) tmp2.z = minZ;
-            if (dz < 0 && oldPos.z >= maxX && tmp2.z < maxX) tmp2.z = maxX;
+            if (dz < 0 && oldPos.z >= maxZ && tmp2.z < maxZ) tmp2.z = maxZ;
         }
     }
+
     newPos = tmp2;
 }
 
