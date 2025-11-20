@@ -32,8 +32,12 @@
         },
         {
           "DockedHeight": 87,
-          "SelectedChildIndex": 1,
+          "SelectedChildIndex": 2,
           "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{d78612c7-9962-4b83-95d9-268046dad23a}"
+            },
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{34e76e81-ee4a-11d0-ae2e-00a0c90fffc3}"
@@ -46,7 +50,7 @@
               "RelativeDocumentMoniker": "TinyXML_Test\\TinyXML_Test.cpp",
               "ToolTip": "G:\\git\\COMP3000\\TinyXML_Test\\TinyXML_Test\\TinyXML_Test.cpp",
               "RelativeToolTip": "TinyXML_Test\\TinyXML_Test.cpp",
-              "ViewState": "AgIAAAsAAAAAAAAAAAAmwCAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAABMAAAAAAAAAAAAUwCAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2025-11-05T22:54:41.736Z",
               "EditorCaption": ""
