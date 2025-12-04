@@ -5,6 +5,10 @@
     {
       "AbsoluteMoniker": "D:0:0:{EED9CE10-F0CE-4959-A4D9-42792EC6AAC6}|Exit Strategy\\Exit Strategy.vcxproj|G:\\git\\COMP3000\\Exit Strategy\\Exit Strategy\\main.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{EED9CE10-F0CE-4959-A4D9-42792EC6AAC6}|Exit Strategy\\Exit Strategy.vcxproj|solutionrelative:Exit Strategy\\main.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|G:\\git\\COMP3000\\Exit Strategy\\Exit Strategy\\assets\\dialogue.xml||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:Exit Strategy\\assets\\dialogue.xml||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
     }
   ],
   "DocumentGroupContainers": [
@@ -36,9 +40,22 @@
               "RelativeDocumentMoniker": "Exit Strategy\\main.cpp",
               "ToolTip": "G:\\git\\COMP3000\\Exit Strategy\\Exit Strategy\\main.cpp",
               "RelativeToolTip": "Exit Strategy\\main.cpp",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAABoAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAACoAAAAAAAAAAAAAABoAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
               "WhenOpened": "2025-11-05T23:36:46.673Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "dialogue.xml",
+              "DocumentMoniker": "G:\\git\\COMP3000\\Exit Strategy\\Exit Strategy\\assets\\dialogue.xml",
+              "RelativeDocumentMoniker": "Exit Strategy\\assets\\dialogue.xml",
+              "ToolTip": "G:\\git\\COMP3000\\Exit Strategy\\Exit Strategy\\assets\\dialogue.xml",
+              "RelativeToolTip": "Exit Strategy\\assets\\dialogue.xml",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003576|",
+              "WhenOpened": "2025-12-04T00:08:21.898Z",
               "EditorCaption": ""
             }
           ]
