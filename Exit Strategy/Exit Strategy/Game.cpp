@@ -1,0 +1,869 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <sstream>
+#include <unordered_map>
+#include <string>
+#include <fstream>
+#include <cstddef>
+#include <algorithm>
+
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
+#include "Map.h"
+#include "UI.h"
+#include "Guard.h"
+
+#include "stb_easy_font.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
+
+static const int DEFAULT_W = 1280;
+static const int DEFAULT_H = 720;
+
+// ---------- Camera ----------
+struct Camera {
+    glm::vec3 pos{ 0.0f, 1.8f, 10.0f }; // start just south of town square
+    float yaw = -90.0f;
+    float pitch = 0.0f;
+    float fov = 60.0f;
+
+    float moveSpeed = 4.0f;
+    float sprintMult = 1.8f;
+    float mouseSens = 0.12f;
+
+    glm::mat4 getView() const {
+        glm::vec3 f;
+        f.x = cosf(glm::radians(yaw)) * cosf(glm::radians(pitch));
+        f.y = sinf(glm::radians(pitch));
+        f.z = sinf(glm::radians(yaw)) * cosf(glm::radians(pitch));
+        return glm::lookAt(pos, pos + glm::normalize(f), glm::vec3(0, 1, 0));
+    }
+};
+Camera gCam;
+
+GLFWwindow* gWindow = nullptr;
+bool gFirstMouse = true;
+double gLastX = DEFAULT_W * 0.5, gLastY = DEFAULT_H * 0.5;
+bool gMouseLocked = true;
+
+// Jump + gravity state
+float gVelY = 0.0f;
+bool  gGrounded = true;
+const float kEyeHeight = 1.8f;
+const float kGravity = -18.0f;
+const float kJumpSpeed = 6.5f;
+
+// Fullscreen toggle state
+bool gFullscreen = false;
+int  gWindowedX = 100, gWindowedY = 100;
+int  gWindowedW = DEFAULT_W, gWindowedH = DEFAULT_H;
+
+// HUD text strings
+std::string gHudPrompt;
+
+// Simple toast message (no NPC dialogue)
+std::string gHudToast;
+float gHudToastTimer = 0.0f;
+
+// ---------- Collision ----------
+inline AABB boxFromTS(const glm::vec3& t, const glm::vec3& s) { return AABB{ t - s, t + s }; }
+
+// ---------- NPC ----------
+struct NPC {
+    glm::vec3 pos{ -10.0f, 0.0f, 3.0f };
+    glm::vec3 half{ 0.7f, 1.2f, 0.7f };
+};
+NPC gNPC;
+
+// ---------- Input edge helper ----------
+bool pressed(GLFWwindow* w, int key) {
+    static std::unordered_map<int, int> last;
+    int s = glfwGetKey(w, key);
+    bool p = (s == GLFW_PRESS) && (last[key] != GLFW_PRESS);
+    last[key] = s;
+    return p;
+}
+
+// ---------- Callbacks ----------
+void framebuffer_size_callback(GLFWwindow*, int w, int h) {
+    gFBWidth = w;
+    gFBHeight = h;
+    glViewport(0, 0, w, h);
+}
+
+void cursor_pos_callback(GLFWwindow*, double x, double y) {
+    if (!gMouseLocked) return;
+    if (gFirstMouse) { gLastX = x; gLastY = y; gFirstMouse = false; }
+
+    double xoff = x - gLastX;
+    double yoff = gLastY - y;   // note inverted Y
+    gLastX = x; gLastY = y;
+
+    // If map is open and we are dragging with RMB, pan the map instead of rotating camera
+    if (gMapOpen && gMapDragging) {
+        const float BASE_WORLD_HALF = 30.0f;
+        float worldHalf = BASE_WORLD_HALF / gMapZoom;
+
+        float mapSize = std::min((float)gFBWidth, (float)gFBHeight) * 0.95f;
+        float scale = mapSize / (worldHalf * 2.0f);
+
+        // Screen drag -> world offset
+        float dxWorld = (float)(-xoff) / scale; // drag right, world moves right visually
+        float dzWorld = (float)(yoff) / scale; // drag up, world moves up visually
+
+        gMapCenter.x += dxWorld;
+        gMapCenter.y += dzWorld;
+
+        // Clamp centre so you cannot drag way off map
+        float maxCenter = 25.0f;
+        gMapCenter.x = glm::clamp(gMapCenter.x, -maxCenter, maxCenter);
+        gMapCenter.y = glm::clamp(gMapCenter.y, -maxCenter, maxCenter);
+
+        return; // do not rotate camera while panning map
+    }
+
+    // Normal camera look
+    gCam.yaw += (float)xoff * gCam.mouseSens;
+    gCam.pitch += (float)yoff * gCam.mouseSens;
+    gCam.pitch = glm::clamp(gCam.pitch, -89.0f, 89.0f);
+}
+
+void toggleFullscreen() {
+    gFullscreen = !gFullscreen;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+    if (gFullscreen) {
+        glfwGetWindowPos(gWindow, &gWindowedX, &gWindowedY);
+        glfwGetWindowSize(gWindow, &gWindowedW, &gWindowedH);
+
+        glfwSetWindowMonitor(gWindow, monitor, 0, 0,
+            mode->width, mode->height, mode->refreshRate);
+        glfwSwapInterval(1);
+    }
+    else {
+        glfwSetWindowMonitor(gWindow, nullptr, gWindowedX, gWindowedY,
+            gWindowedW, gWindowedH, 0);
+        glfwSwapInterval(1);
+    }
+}
+
+void key_callback(GLFWwindow* w, int key, int, int action, int) {
+    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        if (gMouseLocked) {
+            gMouseLocked = false;
+            glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+        else {
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+        }
+    }
+    if (key == GLFW_KEY_F11 && action == GLFW_PRESS) {
+        toggleFullscreen();
+    }
+}
+
+void mouse_button_callback(GLFWwindow* w, int button, int action, int) {
+    // Left click to relock camera
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        if (!gMouseLocked) {
+            gMouseLocked = true;
+            gFirstMouse = true;
+            double cx, cy; glfwGetCursorPos(w, &cx, &cy);
+            gLastX = cx; gLastY = cy;
+            glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+    }
+
+    // Right click drag on fullscreen map
+    if (button == GLFW_MOUSE_BUTTON_RIGHT) {
+        if (action == GLFW_PRESS && gMapOpen) {
+            gMapDragging = true;
+            glfwGetCursorPos(w, &gMapDragLastX, &gMapDragLastY);
+        }
+        else if (action == GLFW_RELEASE) {
+            gMapDragging = false;
+        }
+    }
+}
+
+void window_focus_callback(GLFWwindow* w, int focused) {
+    if (focused && gMouseLocked) {
+        gFirstMouse = true;
+        glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+}
+
+void scroll_callback(GLFWwindow*, double, double yoffset) {
+    if (!gMapOpen) return;
+
+    float zoomFactor = 1.0f + (float)yoffset * 0.1f; // wheel up = zoom in, down = out
+    gMapZoom *= zoomFactor;
+
+    if (gMapZoom < gMapZoomMin) gMapZoom = gMapZoomMin;
+    if (gMapZoom > gMapZoomMax) gMapZoom = gMapZoomMax;
+}
+
+// ---------- GL helpers ----------
+GLuint compile(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    GLint ok = 0;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        GLint len = 0; glGetShaderiv(s, GL_INFO_LOG_LENGTH, &len);
+        std::vector<GLchar> log(len);
+        glGetShaderInfoLog(s, len, nullptr, log.data());
+        std::cerr << "Shader compile error:\n" << log.data() << "\n";
+    }
+    return s;
+}
+
+GLuint linkProgram(const char* vs, const char* fs) {
+    GLuint v = compile(GL_VERTEX_SHADER, vs);
+    GLuint f = compile(GL_FRAGMENT_SHADER, fs);
+    GLuint p = glCreateProgram();
+    glAttachShader(p, v);
+    glAttachShader(p, f);
+    glLinkProgram(p);
+    glDeleteShader(v);
+    glDeleteShader(f);
+    GLint ok = 0;
+    glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        GLint len = 0; glGetProgramiv(p, GL_INFO_LOG_LENGTH, &len);
+        std::vector<GLchar> log(len);
+        glGetProgramInfoLog(p, len, nullptr, log.data());
+        std::cerr << "Program link error:\n" << log.data() << "\n";
+    }
+    return p;
+}
+
+// ---------- Texture loader ----------
+GLuint gNPCTexture = 0;
+
+GLuint loadTexture2D(const std::string& path) {
+    int w, h, channels;
+    stbi_set_flip_vertically_on_load(true);
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    if (!data) {
+        std::cerr << "Failed to load texture: " << path << "\n";
+        return 0;
+    }
+
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    stbi_image_free(data);
+    return tex;
+}
+
+// ---------- Meshes ----------
+struct Mesh { GLuint vao = 0, vbo = 0; GLsizei count = 0; };
+
+Mesh makeGroundPlane(float half = 50.f) {
+    float y = 0, s = half;
+    float v[] = {
+        -s,y,-s, .35,.38,.40,  s,y,-s, .35,.38,.40,  s,y, s, .35,.38,.40,
+        -s,y,-s, .35,.38,.40,  s,y, s, .35,.38,.40, -s,y, s, .35,.38,.40
+    };
+    Mesh m;
+    glGenVertexArrays(1, &m.vao);
+    glGenBuffers(1, &m.vbo);
+    glBindVertexArray(m.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glBindVertexArray(0);
+    m.count = 6;
+    return m;
+}
+
+// Simple coloured cube (for walls / buildings)
+Mesh makeBox() {
+    float v[] = {
+        // pos            // col
+        // front
+        -1,-1, 1,  .8,.3,.3,  1,-1, 1,  .8,.3,.3,  1, 1, 1,  .8,.3,.3,
+        -1,-1, 1,  .8,.3,.3,  1, 1, 1,  .8,.3,.3, -1, 1, 1,  .8,.3,.3,
+        // back
+        -1,-1,-1,  .3,.3,.8,  1, 1,-1,  .3,.3,.8,  1,-1,-1,  .3,.3,.8,
+        -1,-1,-1,  .3,.3,.8, -1, 1,-1,  .3,.3,.8,  1, 1,-1,  .3,.3,.8,
+        // left
+        -1,-1,-1,  .3,.8,.3, -1,-1, 1,  .3,.8,.3, -1, 1, 1,  .3,.8,.3,
+        -1,-1,-1,  .3,.8,.3, -1, 1, 1,  .3,.8,.3, -1, 1,-1,  .3,.8,.3,
+        // right
+         1,-1,-1,  .8,.8,.3,  1, 1, 1,  .8,.8,.3,  1,-1, 1,  .8,.8,.3,
+         1,-1,-1,  .8,.8,.3,  1, 1,-1,  .8,.8,.3,  1, 1, 1,  .8,.8,.3,
+         // top
+         -1, 1, 1,  .6,.4,.9,  1, 1, 1,  .6,.4,.9,  1, 1,-1,  .6,.4,.9,
+         -1, 1, 1,  .6,.4,.9,  1, 1,-1,  .6,.4,.9, -1, 1,-1,  .6,.4,.9,
+         // bottom
+         -1,-1, 1,  .4,.9,.9,  1,-1,-1,  .4,.9,.9,  1,-1, 1,  .4,.9,.9,
+         -1,-1, 1,  .4,.9,.9, -1,-1,-1,  .4,.9,.9,  1,-1,-1,  .4,.9,.9
+    };
+    Mesh m;
+    glGenVertexArrays(1, &m.vao);
+    glGenBuffers(1, &m.vbo);
+    glBindVertexArray(m.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glBindVertexArray(0);
+    m.count = 36;
+    return m;
+}
+
+// ---------- World-space shader ----------
+const char* kVS = R"(#version 330 core
+layout (location=0) in vec3 aPos;
+layout (location=1) in vec3 aCol;
+uniform mat4 uMVP;
+out vec3 vCol;
+void main(){
+    vCol = aCol;
+    gl_Position = uMVP * vec4(aPos,1.0);
+})";
+
+const char* kFS = R"(#version 330 core
+in vec3 vCol;
+out vec4 FragColor;
+void main(){ FragColor = vec4(vCol,1.0); })";
+
+// ---------- Ray vs AABB (for NPC look-at) ----------
+float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
+    glm::vec3 t1 = (b.min - ro) / rd;
+    glm::vec3 t2 = (b.max - ro) / rd;
+    glm::vec3 tmin = glm::min(t1, t2);
+    glm::vec3 tmax = glm::max(t1, t2);
+
+    float tN = std::max(std::max(tmin.x, tmin.y), tmin.z);
+    float tF = std::min(std::min(tmax.x, tmax.y), tmax.z);
+    if (tF < 0.0f || tN > tF) return -1.0f;
+    return tN;
+}
+
+
+
+// ================= ASSIMP TEXTURED MODEL =================
+
+struct SimpleVertex {
+    glm::vec3 pos;
+    glm::vec2 uv;
+};
+
+struct AssimpModel {
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLsizei vertexCount = 0;
+
+    bool load(const std::string& path) {
+        Assimp::Importer importer;
+
+        const aiScene* scene = importer.ReadFile(
+            path,
+            aiProcess_Triangulate |
+            aiProcess_JoinIdenticalVertices
+        );
+
+        if (!scene || !scene->HasMeshes()) {
+            std::cerr << "Assimp failed: " << importer.GetErrorString() << "\n";
+            return false;
+        }
+
+        aiMesh* mesh = scene->mMeshes[0];
+
+        std::vector<SimpleVertex> verts;
+        verts.reserve(mesh->mNumFaces * 3);
+
+        for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
+            const aiFace& face = mesh->mFaces[f];
+            if (face.mNumIndices != 3) continue;
+
+            for (unsigned int i = 0; i < 3; ++i) {
+                unsigned int idx = face.mIndices[i];
+
+                SimpleVertex v{};
+                const aiVector3D& p = mesh->mVertices[idx];
+                v.pos = glm::vec3(p.x, p.y, p.z);
+
+                if (mesh->mTextureCoords[0]) {
+                    const aiVector3D& t = mesh->mTextureCoords[0][idx];
+                    v.uv = glm::vec2(t.x, t.y);
+                }
+                else {
+                    v.uv = glm::vec2(0.0f);
+                }
+
+                verts.push_back(v);
+            }
+        }
+
+        if (verts.empty()) {
+            std::cerr << "Assimp: no vertices generated from mesh\n";
+            return false;
+        }
+
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+            verts.size() * sizeof(SimpleVertex),
+            verts.data(),
+            GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+            sizeof(SimpleVertex), (void*)0);
+
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+            sizeof(SimpleVertex),
+            (void*)offsetof(SimpleVertex, uv));
+
+        glBindVertexArray(0);
+
+        vertexCount = (GLsizei)verts.size();
+        std::cout << "Assimp loaded: " << path
+            << " vertices: " << vertexCount << "\n";
+        return true;
+    }
+
+    void draw() const {
+        if (!vao || !vertexCount) return;
+        glBindVertexArray(vao);
+        glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+        glBindVertexArray(0);
+    }
+};
+
+AssimpModel gNPCModel;
+
+const char* kObjVS = R"(#version 330 core
+layout (location=0) in vec3 aPos;
+layout (location=1) in vec2 aUV;
+uniform mat4 uMVP;
+out vec2 vUV;
+void main(){
+    vUV = aUV;
+    gl_Position = uMVP * vec4(aPos, 1.0);
+}
+)";
+
+const char* kObjFS = R"(#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+out vec4 FragColor;
+void main(){
+    FragColor = texture(uTex, vUV);
+}
+)";
+
+GLuint gObjProg = 0;
+GLint  gObjMVP = -1;
+GLint  gObjTex = -1;
+
+// ---------- Collision resolution in XZ ----------
+void resolveXZ(const glm::vec3& oldPos, glm::vec3& newPos,
+    const std::vector<AABB>& boxes, float radius)
+{
+    glm::vec3 tmp = newPos;
+
+    float dx = newPos.x - oldPos.x;
+    for (const auto& b : boxes) {
+        float minX = b.min.x - radius, maxX = b.max.x + radius;
+        float minZ = b.min.z - radius, maxZ = b.max.z + radius;
+
+        if (tmp.z > minZ && tmp.z < maxZ) {
+            if (dx > 0 && oldPos.x <= minX && tmp.x > minX) tmp.x = minX;
+            if (dx < 0 && oldPos.x >= maxX && tmp.x < maxX) tmp.x = maxX;
+        }
+    }
+
+    float dz = newPos.z - oldPos.z;
+    glm::vec3 tmp2 = tmp;
+    for (const auto& b : boxes) {
+        float minX = b.min.x - radius, maxX = b.max.x + radius;
+        float minZ = b.min.z - radius, maxZ = b.max.z + radius;
+
+        if (tmp2.x > minX && tmp2.x < maxX) {
+            if (dz > 0 && oldPos.z <= minZ && tmp2.z > minZ) tmp2.z = minZ;
+            if (dz < 0 && oldPos.z >= maxZ && tmp2.z < maxZ) tmp2.z = maxZ;
+        }
+    }
+
+    newPos = tmp2;
+}
+
+// ---------- Movement with jump + gravity + collision ----------
+void processMovement(float dt, const std::vector<AABB>& boxes) {
+    float speed = gCam.moveSpeed;
+    if (glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+        glfwGetKey(gWindow, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+        speed *= gCam.sprintMult;
+    }
+
+    glm::vec3 f{ cosf(glm::radians(gCam.yaw)), 0.0f, sinf(glm::radians(gCam.yaw)) };
+    f = glm::normalize(f);
+    glm::vec3 r = glm::normalize(glm::cross(f, glm::vec3(0, 1, 0)));
+
+    glm::vec3 vel(0);
+    if (glfwGetKey(gWindow, GLFW_KEY_W) == GLFW_PRESS) vel += f;
+    if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) vel -= f;
+    if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) vel -= r;
+    if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) vel += r;
+    if (glm::length(vel) > 0) vel = glm::normalize(vel) * speed;
+
+    glm::vec3 oldPos = gCam.pos;
+    glm::vec3 newPos = oldPos + vel * dt;
+
+    if (gGrounded && glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS) {
+        gVelY = kJumpSpeed;
+        gGrounded = false;
+    }
+
+    gVelY += kGravity * dt;
+    newPos.y += gVelY * dt;
+
+    float feetY = newPos.y - kEyeHeight;
+    if (feetY < 0.0f) {
+        newPos.y = kEyeHeight;
+        gVelY = 0.0f;
+        gGrounded = true;
+    }
+    else {
+        gGrounded = false;
+    }
+
+    const float playerRadius = 0.4f;
+    resolveXZ(oldPos, newPos, boxes, playerRadius);
+
+    gCam.pos = newPos;
+}
+
+// Load map data from assets/map.xml
+// Walls are read from <Maze> ASCII where '#' = wall, '.' = empty
+// Spawn/Exit/PowerCell/NPCs are read from their tags.
+
+int Game_Run() {
+    if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+#endif
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
+
+    gWindow = glfwCreateWindow(DEFAULT_W, DEFAULT_H, "Exit Strategy", nullptr, nullptr);
+    if (!gWindow) { glfwTerminate(); return 1; }
+    glfwMakeContextCurrent(gWindow);
+    glfwSwapInterval(1);
+
+    glfwSetFramebufferSizeCallback(gWindow, framebuffer_size_callback);
+    glfwSetCursorPosCallback(gWindow, cursor_pos_callback);
+    glfwSetKeyCallback(gWindow, key_callback);
+    glfwSetMouseButtonCallback(gWindow, mouse_button_callback);
+    glfwSetWindowFocusCallback(gWindow, window_focus_callback);
+    glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetScrollCallback(gWindow, scroll_callback);
+
+    glewExperimental = GL_TRUE;
+    if (glewInit() != GLEW_OK) { glfwDestroyWindow(gWindow); glfwTerminate(); return 1; }
+
+    int fbw, fbh; glfwGetFramebufferSize(gWindow, &fbw, &fbh);
+    glViewport(0, 0, fbw, fbh);
+    glEnable(GL_DEPTH_TEST);
+
+    Mesh ground = makeGroundPlane(60.0f);
+    Mesh box = makeBox(); // for walls / buildings
+
+    GLuint prog = linkProgram(kVS, kFS);
+    GLint uMVP = glGetUniformLocation(prog, "uMVP");
+
+    initCrosshair();
+    initHudText();
+    initMinimap();
+
+    gObjProg = linkProgram(kObjVS, kObjFS);
+    gObjMVP = glGetUniformLocation(gObjProg, "uMVP");
+    gObjTex = glGetUniformLocation(gObjProg, "uTex");
+
+    gNPCModel.load("assets/npc.obj");
+    gNPCTexture = loadTexture2D("assets/man_t256.png");
+
+
+    // ---------- Map layout: Data-driven XML ----------
+    // Define your maze in assets/map.xml (ASCII grid in <Maze> plus spawn/exit markers).
+    // '#' in <Maze> becomes a solid wall with collision.
+
+    std::vector<glm::mat4> mapMats;
+    std::vector<AABB> colliders;
+
+    auto addMapBox = [&](const glm::vec3& center, const glm::vec3& half) {
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), center)
+            * glm::scale(glm::mat4(1.0f), half);
+        mapMats.push_back(model);
+        colliders.push_back(AABB{ center - half, center + half });
+        };
+
+    if (!loadMapXML("assets/map.xml")) {
+        std::cerr << "FATAL: could not load assets/map.xml\n";
+        return 1;
+    }
+
+    // World mapping: keep the same overall scale as before so minimap feels consistent.
+    const float WORLD_SIZE = 60.0f; // spans [-30..+30]
+    const float ORIGIN_X = -WORLD_SIZE * 0.5f;
+    const float ORIGIN_Z = -WORLD_SIZE * 0.5f;
+
+    const int MAP_W = std::max(1, gMap.width);
+    const int MAP_H = std::max(1, gMap.height);
+
+    const float CELL_X = WORLD_SIZE / (float)MAP_W;
+    const float CELL_Z = WORLD_SIZE / (float)MAP_H;
+
+    const float WALL_HALF_Y = 2.5f;
+    const float WALL_HALF_X = CELL_X * 0.5f;
+    const float WALL_HALF_Z = CELL_Z * 0.5f;
+
+    auto worldFromCell = [&](int cx, int cz) -> glm::vec3 {
+        float wx = ORIGIN_X + (cx + 0.5f) * CELL_X;
+        float wz = ORIGIN_Z + (cz + 0.5f) * CELL_Z;
+        return glm::vec3(wx, 0.0f, wz);
+        };
+
+    // Build maze walls from XML
+    for (const auto& w : gMap.walls) {
+        glm::vec3 p = worldFromCell(w.x, w.y);
+        addMapBox(glm::vec3(p.x, WALL_HALF_Y, p.z), glm::vec3(WALL_HALF_X, WALL_HALF_Y, WALL_HALF_Z));
+    }
+    // Spawn / markers
+    glm::vec3 playerSpawn = worldFromCell(gMap.spawn.x, gMap.spawn.y);
+
+    glm::vec3 exitKeyPos(0.0f);
+    if (gMap.exitKey.x > -1000) {
+        exitKeyPos = worldFromCell(gMap.exitKey.x, gMap.exitKey.y);
+    }
+
+    glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
+    glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
+
+    // Start player at the spawn tile (eye height)
+    gCam.pos = glm::vec3(playerSpawn.x, kEyeHeight, playerSpawn.z);
+
+    // Place NPC from XML (first NPC)
+    if (!gMap.npcSpawns.empty()) {
+        glm::vec3 npcCell = worldFromCell(gMap.npcSpawns[0].x, gMap.npcSpawns[0].y);
+        gNPC.pos = glm::vec3(npcCell.x, 0.0f, npcCell.z);
+    }
+
+    // Remember how many colliders are "map" (exclude NPC)
+    size_t mapColliderCount = colliders.size();
+
+    // Also collide with NPC
+    colliders.push_back(AABB{ gNPC.pos - gNPC.half, gNPC.pos + gNPC.half });
+
+    double last = glfwGetTime();
+    double fpsTimer = last;
+    int frames = 0;
+    float fps = 0.0f;
+
+    while (!glfwWindowShouldClose(gWindow)) {
+        double now = glfwGetTime();
+        float dt = float(now - last); last = now;
+
+        glfwPollEvents();
+
+        // Toggle map
+        if (pressed(gWindow, GLFW_KEY_M)) {
+            gMapOpen = !gMapOpen;
+
+            // When opening map, center view on player like GTA/RDR
+            if (gMapOpen) {
+                gMapCenter = glm::vec2(gCam.pos.x, gCam.pos.z);
+            }
+        }
+
+        // Disable movement when map is open
+        if (!gMapOpen) {
+            processMovement(dt, colliders);
+        }
+
+        glClearColor(0.10f, 0.12f, 0.15f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glm::mat4 V = gCam.getView();
+        glfwGetFramebufferSize(gWindow, &fbw, &fbh);
+        float aspect = fbh > 0 ? float(fbw) / float(fbh) : 16.f / 9.f;
+        glm::mat4 P = glm::perspective(glm::radians(gCam.fov), aspect, 0.1f, 200.0f);
+
+        gHudPrompt.clear();
+
+        // toast countdown
+        if (gHudToastTimer > 0.0f) {
+            gHudToastTimer -= dt;
+            if (gHudToastTimer <= 0.0f) {
+                gHudToastTimer = 0.0f;
+                gHudToast.clear();
+            }
+        }
+
+        // Exit key pickup
+        if (!gMap.hasExitKey && gMap.exitKey.x > -1000) {
+            float dx = gCam.pos.x - exitKeyPos.x;
+            float dz = gCam.pos.z - exitKeyPos.z;
+            float dist2 = dx * dx + dz * dz;
+            if (dist2 < 0.85f * 0.85f) {
+                gMap.hasExitKey = true;
+                gHudToast = "Exit Key collected!";
+                gHudToastTimer = 2.0f;
+            }
+        }
+
+        glm::vec3 camForward{
+            cosf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch)),
+            sinf(glm::radians(gCam.pitch)),
+            sinf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch))
+        };
+        camForward = glm::normalize(camForward);
+
+        // Simple NPC interaction prompt (no dialogue system)
+        AABB npcBox{ gNPC.pos - gNPC.half, gNPC.pos + gNPC.half };
+        float tHit = rayAABB(gCam.pos, camForward, npcBox);
+        bool lookingAt = tHit > 0.0f && tHit < 3.0f;
+
+        if (lookingAt) {
+            gHudPrompt = "Press E to interact";
+            if (pressed(gWindow, GLFW_KEY_E)) {
+                gHudToast = "Interaction!";
+                gHudToastTimer = 1.5f;
+            }
+        }
+
+        // Render ground
+        glUseProgram(prog);
+        {
+            glm::mat4 MVP = P * V * glm::mat4(1.0f);
+            glUniformMatrix4fv(uMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+            glBindVertexArray(ground.vao);
+            glDrawArrays(GL_TRIANGLES, 0, ground.count);
+        }
+
+        // Render map boxes (walls + buildings + forest + factories)
+        glBindVertexArray(box.vao);
+        for (const auto& M : mapMats) {
+            glm::mat4 MVP = P * V * M;
+            glUniformMatrix4fv(uMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+            glDrawArrays(GL_TRIANGLES, 0, box.count);
+        }
+        glBindVertexArray(0);
+
+        // Render NPC model
+        {
+            glm::vec3 npcWorldPos(gNPC.pos.x, 0.0f, gNPC.pos.z);
+            glm::mat4 model = glm::translate(glm::mat4(1.0f), npcWorldPos) *
+                glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
+            glm::mat4 MVP = P * V * model;
+
+            glUseProgram(gObjProg);
+            glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gNPCTexture);
+            glUniform1i(gObjTex, 0);
+
+            gNPCModel.draw();
+        }
+
+        // Crosshair
+        drawCrosshairNDC(fbw, fbh);
+
+        // Minimap or fullscreen map
+        if (!gMapOpen) {
+            drawMinimap(colliders, mapColliderCount, fbw, fbh, gCam.pos, gCam.yaw);
+        }
+        else {
+            drawFullscreenMap(colliders, mapColliderCount, fbw, fbh,
+                playerSpawn, exitKeyPos, powerCellPos, exitGatePos,
+                gCam.pos, gCam.yaw);
+        }
+
+        // HUD text
+        if (!gHudPrompt.empty()) {
+            float promptY = fbh * 0.28f;
+            float promptX = fbw * 0.5f - (gHudPrompt.size() * 4.0f);
+            drawTextScreen(gHudPrompt, promptX, promptY, fbw, fbh,
+                glm::vec3(1.0f, 1.0f, 0.7f), 2.5f);
+        }
+
+        if (!gHudToast.empty()) {
+            float toastY = fbh * 0.18f;
+            float toastX = fbw * 0.5f - (gHudToast.size() * 4.0f);
+            drawTextScreen(gHudToast, toastX, toastY, fbw, fbh,
+                glm::vec3(0.7f, 1.0f, 0.7f), 2.5f);
+        }
+
+
+        glfwSwapBuffers(gWindow);
+
+        // FPS counter in title
+        frames++;
+        double current = glfwGetTime();
+        if (current - fpsTimer >= 0.5) {
+            fps = frames / float(current - fpsTimer);
+            fpsTimer = current;
+            frames = 0;
+
+            {
+                std::ostringstream oss; oss << int(fps);
+                std::string title = "Exit Strategy - FPS: " + oss.str();
+                glfwSetWindowTitle(gWindow, title.c_str());
+            }
+        }
+    }
+
+    glDeleteVertexArrays(1, &ground.vao); glDeleteBuffers(1, &ground.vbo);
+    glDeleteVertexArrays(1, &box.vao);    glDeleteBuffers(1, &box.vbo);
+    glDeleteProgram(prog);
+
+    UI_Shutdown();
+
+    glDeleteProgram(gObjProg);
+    glDeleteTextures(1, &gNPCTexture);
+
+    glfwDestroyWindow(gWindow);
+    glfwTerminate();
+    return 0;
+}
