@@ -2,6 +2,7 @@
 #include "Map.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -215,16 +216,32 @@ void initMinimap() {
 void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int fbh, const glm::vec3& playerPos, float playerYawDeg) {
     if (!gHudProg || !gMinimapVAO || boxCount == 0) return;
 
-    const float WORLD_HALF = 30.0f;          // world extents roughly [-30,30]
-    const float size = 220.0f;               // minimap square size in pixels
+    // Keep the minimap pixel size the same.
+    const float size = 220.0f;
     const float margin = 20.0f;
+    const float x0 = fbw - size - margin;
+    const float y0 = margin;
+    const float x1 = fbw - margin;
+    const float y1 = margin + size;
+    const float cxScreen = (x0 + x1) * 0.5f;
+    const float cyScreen = (y0 + y1) * 0.5f;
 
-    float x0 = fbw - size - margin;
-    float y0 = margin;
-    float x1 = fbw - margin;
-    float y1 = margin + size;
+	// The world coords that fit in the minimap (half range in each direction from player).
+    const float worldHalf = 18.0f;
+    const float scale = size / (worldHalf * 2.0f);
 
-    float scale = size / (WORLD_HALF * 2.0f); // world->screen
+    const float yawRad = glm::radians(playerYawDeg);
+    const float c = cosf(-yawRad);
+    const float s = sinf(-yawRad);
+
+    auto toMini = [&](float wx, float wz) -> glm::vec2 {
+        // Center on player, rotate world opposite to player yaw so the arrow can stay "up".
+        float rx = wx - playerPos.x;
+        float rz = wz - playerPos.z;
+        float mx = rx * c - rz * s;
+        float mz = rx * s + rz * c;
+        return { cxScreen + mx * scale, cyScreen + mz * scale };
+        };
 
     glUseProgram(gHudProg);
     glUniform2f(gHudScreenSizeLoc, (float)fbw, (float)fbh);
@@ -233,85 +250,59 @@ void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int f
 
     glDisable(GL_DEPTH_TEST);
 
-    // Background
+    // Background + border
     {
-        float bgVerts[8] = {
-            x0, y0,
-            x1, y0,
-            x1, y1,
-            x0, y1
-        };
+        float bgVerts[8] = { x0, y0,  x1, y0,  x1, y1,  x0, y1 };
         glBufferData(GL_ARRAY_BUFFER, sizeof(bgVerts), bgVerts, GL_DYNAMIC_DRAW);
         glUniform3f(gHudColorLoc, 0.03f, 0.03f, 0.08f);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
 
-        // Border
         glLineWidth(2.0f);
         glUniform3f(gHudColorLoc, 1.0f, 1.0f, 1.0f);
         glDrawArrays(GL_LINE_LOOP, 0, 4);
     }
 
-    // World blocks as rectangles
+    // Clip everything to the minimap square (prevents rotated walls drawing outside)
+    glEnable(GL_SCISSOR_TEST);
+    glScissor((int)x0, (int)(fbh - y1), (int)size, (int)size);
+
+    // World blocks (draw each AABB as a rotated quad in minimap space)
     for (size_t i = 0; i < boxCount; ++i) {
         const AABB& b = boxes[i];
 
-        float cx = (b.min.x + b.max.x) * 0.5f;
-        float cz = (b.min.z + b.max.z) * 0.5f;
-        float hx = (b.max.x - b.min.x) * 0.5f;
-        float hz = (b.max.z - b.min.z) * 0.5f;
+        glm::vec2 p0 = toMini(b.min.x, b.min.z);
+        glm::vec2 p1 = toMini(b.max.x, b.min.z);
+        glm::vec2 p2 = toMini(b.max.x, b.max.z);
+        glm::vec2 p3 = toMini(b.min.x, b.max.z);
 
-        float sx = x0 + (cx + WORLD_HALF) * scale;
-        float sy = y0 + (cz + WORLD_HALF) * scale;
-
-        float hxPix = hx * scale;
-        float hzPix = hz * scale;
-
-        float bx0 = sx - hxPix;
-        float bx1 = sx + hxPix;
-        float by0 = sy - hzPix;
-        float by1 = sy + hzPix;
-
-        float boxVerts[8] = {
-            bx0, by0,
-            bx1, by0,
-            bx1, by1,
-            bx0, by1
+        float quad[8] = {
+            p0.x, p0.y,
+            p1.x, p1.y,
+            p2.x, p2.y,
+            p3.x, p3.y
         };
-        glBufferData(GL_ARRAY_BUFFER, sizeof(boxVerts), boxVerts, GL_DYNAMIC_DRAW);
-
-        // Slightly cyan-ish so it stands out
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
         glUniform3f(gHudColorLoc, 0.25f, 0.8f, 0.9f);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
-    // Player arrow
+    // Player arrow stays centered and points UP (map rotates instead)
     {
-        float px = playerPos.x;
-        float pz = playerPos.z;
-        float sx = x0 + (px + WORLD_HALF) * scale;
-        float sy = y0 + (pz + WORLD_HALF) * scale;
+        const float radius = 8.0f;
+        glm::vec2 dir(0.0f, -1.0f);
+        glm::vec2 right(1.0f, 0.0f);
 
-        float radius = 7.0f;
+        glm::vec2 p0 = glm::vec2(cxScreen, cyScreen) + dir * (radius * 1.3f);
+        glm::vec2 p1 = glm::vec2(cxScreen, cyScreen) - dir * (radius * 0.8f) + right * (radius * 0.7f);
+        glm::vec2 p2 = glm::vec2(cxScreen, cyScreen) - dir * (radius * 0.8f) - right * (radius * 0.7f);
 
-        float yawRad = glm::radians(playerYawDeg);
-        glm::vec2 dir(cosf(yawRad), sinf(yawRad));
-        dir = glm::normalize(dir);
-        glm::vec2 right(-dir.y, dir.x);
-
-        glm::vec2 p0 = glm::vec2(sx, sy) + dir * (radius * 1.3f);
-        glm::vec2 p1 = glm::vec2(sx, sy) - dir * (radius * 0.8f) + right * (radius * 0.7f);
-        glm::vec2 p2 = glm::vec2(sx, sy) - dir * (radius * 0.8f) - right * (radius * 0.7f);
-
-        float triVerts[6] = {
-            p0.x, p0.y,
-            p1.x, p1.y,
-            p2.x, p2.y
-        };
-        glBufferData(GL_ARRAY_BUFFER, sizeof(triVerts), triVerts, GL_DYNAMIC_DRAW);
+        float tri[6] = { p0.x, p0.y,  p1.x, p1.y,  p2.x, p2.y };
+        glBufferData(GL_ARRAY_BUFFER, sizeof(tri), tri, GL_DYNAMIC_DRAW);
         glUniform3f(gHudColorLoc, 1.0f, 0.95f, 0.3f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
+    glDisable(GL_SCISSOR_TEST);
     glEnable(GL_DEPTH_TEST);
     glBindVertexArray(0);
 }
@@ -335,7 +326,6 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     glBindVertexArray(gMinimapVAO);
     glBindBuffer(GL_ARRAY_BUFFER, gMinimapVBO);
 
-    // Dark background covering whole screen
     {
         float verts[8] = {
             0,          0,

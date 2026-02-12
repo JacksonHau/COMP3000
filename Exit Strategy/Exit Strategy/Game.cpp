@@ -34,7 +34,7 @@ static const int DEFAULT_H = 720;
 
 // ---------- Camera ----------
 struct Camera {
-    glm::vec3 pos{ 0.0f, 1.8f, 10.0f }; // start just south of town square
+    glm::vec3 pos{ 0.0f, 1.8f, 10.0f };
     float yaw = -90.0f;
     float pitch = 0.0f;
     float fov = 60.0f;
@@ -108,7 +108,7 @@ void cursor_pos_callback(GLFWwindow*, double x, double y) {
     if (gFirstMouse) { gLastX = x; gLastY = y; gFirstMouse = false; }
 
     double xoff = x - gLastX;
-    double yoff = gLastY - y;   // note inverted Y
+    double yoff = gLastY - y;
     gLastX = x; gLastY = y;
 
     // If map is open and we are dragging with RMB, pan the map instead of rotating camera
@@ -131,7 +131,7 @@ void cursor_pos_callback(GLFWwindow*, double x, double y) {
         gMapCenter.x = glm::clamp(gMapCenter.x, -maxCenter, maxCenter);
         gMapCenter.y = glm::clamp(gMapCenter.y, -maxCenter, maxCenter);
 
-        return; // do not rotate camera while panning map
+        return;
     }
 
     // Normal camera look
@@ -253,8 +253,6 @@ GLuint linkProgram(const char* vs, const char* fs) {
 }
 
 // ---------- Texture loader ----------
-GLuint gNPCTexture = 0;
-
 GLuint loadTexture2D(const std::string& path) {
     int w, h, channels;
     stbi_set_flip_vertically_on_load(true);
@@ -468,8 +466,7 @@ struct AssimpModel {
     }
 };
 
-AssimpModel gNPCModel;
-
+//AssimpModel gNPCModel;
 const char* kObjVS = R"(#version 330 core
 layout (location=0) in vec3 aPos;
 layout (location=1) in vec2 aUV;
@@ -572,10 +569,6 @@ void processMovement(float dt, const std::vector<AABB>& boxes) {
     gCam.pos = newPos;
 }
 
-// Load map data from assets/map.xml
-// Walls are read from <Maze> ASCII where '#' = wall, '.' = empty
-// Spawn/Exit/PowerCell/NPCs are read from their tags.
-
 int Game_Run() {
     if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -620,14 +613,7 @@ int Game_Run() {
     gObjMVP = glGetUniformLocation(gObjProg, "uMVP");
     gObjTex = glGetUniformLocation(gObjProg, "uTex");
 
-    gNPCModel.load("assets/npc.obj");
-    gNPCTexture = loadTexture2D("assets/man_t256.png");
-
-
     // ---------- Map layout: Data-driven XML ----------
-    // Define your maze in assets/map.xml (ASCII grid in <Maze> plus spawn/exit markers).
-    // '#' in <Maze> becomes a solid wall with collision.
-
     std::vector<glm::mat4> mapMats;
     std::vector<AABB> colliders;
 
@@ -638,13 +624,20 @@ int Game_Run() {
         colliders.push_back(AABB{ center - half, center + half });
         };
 
-    if (!loadMapXML("assets/map.xml")) {
-        std::cerr << "FATAL: could not load assets/map.xml\n";
-        return 1;
+    // Endless mode via runtime maze generation
+    const bool kUseRandomMaze = true;
+    if (kUseRandomMaze) {
+        generateRandomMaze(32, 32);
+    }
+    else {
+        if (!loadMapXML("assets/map.xml")) {
+            std::cerr << "FATAL: could not load assets/map.xml\n";
+            return 1;
+        }
     }
 
     // World mapping: keep the same overall scale as before so minimap feels consistent.
-    const float WORLD_SIZE = 60.0f; // spans [-30..+30]
+    const float WORLD_SIZE = 90.0f;
     const float ORIGIN_X = -WORLD_SIZE * 0.5f;
     const float ORIGIN_Z = -WORLD_SIZE * 0.5f;
 
@@ -683,17 +676,8 @@ int Game_Run() {
     // Start player at the spawn tile (eye height)
     gCam.pos = glm::vec3(playerSpawn.x, kEyeHeight, playerSpawn.z);
 
-    // Place NPC from XML (first NPC)
-    if (!gMap.npcSpawns.empty()) {
-        glm::vec3 npcCell = worldFromCell(gMap.npcSpawns[0].x, gMap.npcSpawns[0].y);
-        gNPC.pos = glm::vec3(npcCell.x, 0.0f, npcCell.z);
-    }
-
-    // Remember how many colliders are "map" (exclude NPC)
+    // Remember how many colliders are "map"
     size_t mapColliderCount = colliders.size();
-
-    // Also collide with NPC
-    colliders.push_back(AABB{ gNPC.pos - gNPC.half, gNPC.pos + gNPC.half });
 
     double last = glfwGetTime();
     double fpsTimer = last;
@@ -759,19 +743,6 @@ int Game_Run() {
         };
         camForward = glm::normalize(camForward);
 
-        // Simple NPC interaction prompt (no dialogue system)
-        AABB npcBox{ gNPC.pos - gNPC.half, gNPC.pos + gNPC.half };
-        float tHit = rayAABB(gCam.pos, camForward, npcBox);
-        bool lookingAt = tHit > 0.0f && tHit < 3.0f;
-
-        if (lookingAt) {
-            gHudPrompt = "Press E to interact";
-            if (pressed(gWindow, GLFW_KEY_E)) {
-                gHudToast = "Interaction!";
-                gHudToastTimer = 1.5f;
-            }
-        }
-
         // Render ground
         glUseProgram(prog);
         {
@@ -789,23 +760,6 @@ int Game_Run() {
             glDrawArrays(GL_TRIANGLES, 0, box.count);
         }
         glBindVertexArray(0);
-
-        // Render NPC model
-        {
-            glm::vec3 npcWorldPos(gNPC.pos.x, 0.0f, gNPC.pos.z);
-            glm::mat4 model = glm::translate(glm::mat4(1.0f), npcWorldPos) *
-                glm::scale(glm::mat4(1.0f), glm::vec3(1.0f));
-            glm::mat4 MVP = P * V * model;
-
-            glUseProgram(gObjProg);
-            glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
-
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, gNPCTexture);
-            glUniform1i(gObjTex, 0);
-
-            gNPCModel.draw();
-        }
 
         // Crosshair
         drawCrosshairNDC(fbw, fbh);
@@ -861,7 +815,6 @@ int Game_Run() {
     UI_Shutdown();
 
     glDeleteProgram(gObjProg);
-    glDeleteTextures(1, &gNPCTexture);
 
     glfwDestroyWindow(gWindow);
     glfwTerminate();

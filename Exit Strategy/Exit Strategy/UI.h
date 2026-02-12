@@ -5,7 +5,7 @@
 #include <glm/glm.hpp>
 #include <GL/glew.h>
 
-// Shared GL helper (implemented in Game.cpp)
+// Shared GL helper
 GLuint linkProgram(const char* vs, const char* fs);
 
 // UI lifecycle

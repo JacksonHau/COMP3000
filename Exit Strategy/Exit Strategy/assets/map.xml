@@ -1,26 +1,9 @@
 <?xml version="1.0"?>
-<Map width="24" height="24" tileSize="1.0">
-    <Spawn x="1" z="1" />
-    <Exit x="21" z="22" />
-    <PowerCell x="6" z="22" />
-    <ExitKey x="18" z="6" />
-
-    <NPCs>
-        <NPC x="12" z="12" />
-    </NPCs>
-
-	<Guards>
-		<Guard x="10" z="5" speed="2.2" chaseRadius="8.0">
-			<Patrol>
-				<Point x="10" z="5"/>
-				<Point x="18" z="5"/>
-				<Point x="18" z="10"/>
-				<Point x="10" z="10"/>
-			</Patrol>
-		</Guard>
-	</Guards>
-
-	<Maze>
+<!-- Set random="true" to generate a fresh maze each run. seed="0" = auto -->
+<Map width="25" height="25" tileSize="1.0" random="true" seed="0">
+  <Spawn x="1" z="1" />
+  <Exit x="21" z="22" />
+  <PowerCell x="6" z="22" />  <Maze>
 ########################
 #..####........#####...#
 #..#..#........#...#...#
@@ -45,5 +28,5 @@
 #.###.#####.#####.###..#
 #......................#
 ########################
-    </Maze>
+  </Maze>
 </Map>
