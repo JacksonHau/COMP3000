@@ -29,8 +29,8 @@
 #include <assimp/postprocess.h>
 
 
-static const int DEFAULT_W = 1280;
-static const int DEFAULT_H = 720;
+static const int DEFAULT_W = 1080;
+static const int DEFAULT_H = 1920;
 
 // ---------- Camera ----------
 struct Camera {
@@ -303,6 +303,50 @@ Mesh makeGroundPlane(float half = 50.f) {
     return m;
 }
 
+// Textured cube (for walls with brick texture)
+Mesh makeTexturedBox() {
+    float v[] = {
+        // positions          // UVs
+        // front
+        -1,-1, 1,  0,0,   1,-1, 1,  1,0,   1, 1, 1,  1,1,
+        -1,-1, 1,  0,0,   1, 1, 1,  1,1,  -1, 1, 1,  0,1,
+        // back
+        -1,-1,-1,  1,0,   1,-1,-1,  0,0,   1, 1,-1,  0,1,
+        -1,-1,-1,  1,0,   1, 1,-1,  0,1,  -1, 1,-1,  1,1,
+        // left
+        -1,-1,-1,  0,0,  -1,-1, 1,  1,0,  -1, 1, 1,  1,1,
+        -1,-1,-1,  0,0,  -1, 1, 1,  1,1,  -1, 1,-1,  0,1,
+        // right
+         1,-1,-1,  1,0,   1,-1, 1,  0,0,   1, 1, 1,  0,1,
+         1,-1,-1,  1,0,   1, 1, 1,  0,1,   1, 1,-1,  1,1,
+         // top
+         -1, 1, 1,  0,1,   1, 1, 1,  1,1,   1, 1,-1,  1,0,
+         -1, 1, 1,  0,1,   1, 1,-1,  1,0,  -1, 1,-1,  0,0,
+         // bottom
+         -1,-1, 1,  0,0,   1,-1,-1,  1,1,   1,-1, 1,  1,0,
+         -1,-1, 1,  0,0,  -1,-1,-1,  0,1,   1,-1,-1,  1,1
+    };
+
+    Mesh m;
+    glGenVertexArrays(1, &m.vao);
+    glGenBuffers(1, &m.vbo);
+    glBindVertexArray(m.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STATIC_DRAW);
+
+    // Position attribute (location = 0)
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+
+    // UV attribute (location = 1)
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+    m.count = 36; // 12 triangles * 3 vertices
+    return m;
+}
+
 // Simple coloured cube (for walls / buildings)
 Mesh makeBox() {
     float v[] = {
@@ -373,7 +417,6 @@ float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
 
 
 // ================= ASSIMP TEXTURED MODEL =================
-
 struct SimpleVertex {
     glm::vec3 pos;
     glm::vec2 uv;
@@ -627,13 +670,20 @@ int Game_Run() {
     // Endless mode via runtime maze generation
     const bool kUseRandomMaze = true;
     if (kUseRandomMaze) {
-        generateRandomMaze(32, 32);
+        generateRandomMaze(16, 16);
     }
     else {
         if (!loadMapXML("assets/map.xml")) {
             std::cerr << "FATAL: could not load assets/map.xml\n";
             return 1;
         }
+    }
+
+    Mesh texturedBox = makeTexturedBox();
+
+    GLuint brickTexture = loadTexture2D("assets/brick.png");
+    if (!brickTexture) {
+        std::cerr << "Warning: Could not load brick texture, walls will be invisible?\n";
     }
 
     // World mapping: keep the same overall scale as before so minimap feels consistent.
@@ -752,14 +802,32 @@ int Game_Run() {
             glDrawArrays(GL_TRIANGLES, 0, ground.count);
         }
 
-        // Render map boxes (walls + buildings + forest + factories)
-        glBindVertexArray(box.vao);
-        for (const auto& M : mapMats) {
-            glm::mat4 MVP = P * V * M;
-            glUniformMatrix4fv(uMVP, 1, GL_FALSE, glm::value_ptr(MVP));
-            glDrawArrays(GL_TRIANGLES, 0, box.count);
+        // Render textured walls (using brick texture)
+        if (brickTexture) {
+            glUseProgram(gObjProg);
+            glUniform1i(gObjTex, 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, brickTexture);
+
+            glBindVertexArray(texturedBox.vao);
+            for (const auto& M : mapMats) {
+                glm::mat4 MVP = P * V * M;
+                glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+                glDrawArrays(GL_TRIANGLES, 0, texturedBox.count);
+            }
+            glBindVertexArray(0);
         }
-        glBindVertexArray(0);
+        else {
+            // Fallback: render with colored shader if texture failed
+            glUseProgram(prog);
+            glBindVertexArray(box.vao);
+            for (const auto& M : mapMats) {
+                glm::mat4 MVP = P * V * M;
+                glUniformMatrix4fv(uMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+                glDrawArrays(GL_TRIANGLES, 0, box.count);
+            }
+            glBindVertexArray(0);
+        }
 
         // Crosshair
         drawCrosshairNDC(fbw, fbh);

@@ -226,13 +226,19 @@ void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int f
     const float cxScreen = (x0 + x1) * 0.5f;
     const float cyScreen = (y0 + y1) * 0.5f;
 
-	// The world coords that fit in the minimap (half range in each direction from player).
+    // How much world-space we show around the player (in meters/units).
+    // Smaller = more zoomed in. Tune this one value.
     const float worldHalf = 18.0f;
     const float scale = size / (worldHalf * 2.0f);
 
+    // Camera yaw in this project: yaw=0 faces +X, yaw=90 faces +Z.
+    // Minimap screen coords: +X right, +Y down.
+    // We want the player's forward direction to always be "up" on the minimap,
+    // so rotate world by -(yaw + 90deg).
     const float yawRad = glm::radians(playerYawDeg);
-    const float c = cosf(-yawRad);
-    const float s = sinf(-yawRad);
+    const float a = -(yawRad + glm::half_pi<float>());
+    const float c = cosf(a);
+    const float s = sinf(a);
 
     auto toMini = [&](float wx, float wz) -> glm::vec2 {
         // Center on player, rotate world opposite to player yaw so the arrow can stay "up".
@@ -286,10 +292,10 @@ void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int f
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
-    // Player arrow stays centered and points UP (map rotates instead)
+    // Player arrow stays centered and points UP
     {
         const float radius = 8.0f;
-        glm::vec2 dir(0.0f, -1.0f);
+        glm::vec2 dir(0.0f, -1.0f); 
         glm::vec2 right(1.0f, 0.0f);
 
         glm::vec2 p0 = glm::vec2(cxScreen, cyScreen) + dir * (radius * 1.3f);
@@ -326,6 +332,7 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     glBindVertexArray(gMinimapVAO);
     glBindBuffer(GL_ARRAY_BUFFER, gMinimapVBO);
 
+    // Dark background covering whole screen
     {
         float verts[8] = {
             0,          0,
