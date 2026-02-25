@@ -28,7 +28,6 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-
 static const int DEFAULT_W = 1080;
 static const int DEFAULT_H = 1920;
 
@@ -414,101 +413,6 @@ float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
     return tN;
 }
 
-
-
-// ================= ASSIMP TEXTURED MODEL =================
-struct SimpleVertex {
-    glm::vec3 pos;
-    glm::vec2 uv;
-};
-
-struct AssimpModel {
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLsizei vertexCount = 0;
-
-    bool load(const std::string& path) {
-        Assimp::Importer importer;
-
-        const aiScene* scene = importer.ReadFile(
-            path,
-            aiProcess_Triangulate |
-            aiProcess_JoinIdenticalVertices
-        );
-
-        if (!scene || !scene->HasMeshes()) {
-            std::cerr << "Assimp failed: " << importer.GetErrorString() << "\n";
-            return false;
-        }
-
-        aiMesh* mesh = scene->mMeshes[0];
-
-        std::vector<SimpleVertex> verts;
-        verts.reserve(mesh->mNumFaces * 3);
-
-        for (unsigned int f = 0; f < mesh->mNumFaces; ++f) {
-            const aiFace& face = mesh->mFaces[f];
-            if (face.mNumIndices != 3) continue;
-
-            for (unsigned int i = 0; i < 3; ++i) {
-                unsigned int idx = face.mIndices[i];
-
-                SimpleVertex v{};
-                const aiVector3D& p = mesh->mVertices[idx];
-                v.pos = glm::vec3(p.x, p.y, p.z);
-
-                if (mesh->mTextureCoords[0]) {
-                    const aiVector3D& t = mesh->mTextureCoords[0][idx];
-                    v.uv = glm::vec2(t.x, t.y);
-                }
-                else {
-                    v.uv = glm::vec2(0.0f);
-                }
-
-                verts.push_back(v);
-            }
-        }
-
-        if (verts.empty()) {
-            std::cerr << "Assimp: no vertices generated from mesh\n";
-            return false;
-        }
-
-        glGenVertexArrays(1, &vao);
-        glGenBuffers(1, &vbo);
-
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-            verts.size() * sizeof(SimpleVertex),
-            verts.data(),
-            GL_STATIC_DRAW);
-
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
-            sizeof(SimpleVertex), (void*)0);
-
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-            sizeof(SimpleVertex),
-            (void*)offsetof(SimpleVertex, uv));
-
-        glBindVertexArray(0);
-
-        vertexCount = (GLsizei)verts.size();
-        std::cout << "Assimp loaded: " << path
-            << " vertices: " << vertexCount << "\n";
-        return true;
-    }
-
-    void draw() const {
-        if (!vao || !vertexCount) return;
-        glBindVertexArray(vao);
-        glDrawArrays(GL_TRIANGLES, 0, vertexCount);
-        glBindVertexArray(0);
-    }
-};
-
 //AssimpModel gNPCModel;
 const char* kObjVS = R"(#version 330 core
 layout (location=0) in vec3 aPos;
@@ -643,7 +547,7 @@ int Game_Run() {
     glEnable(GL_DEPTH_TEST);
 
     Mesh ground = makeGroundPlane(60.0f);
-    Mesh box = makeBox(); // for walls / buildings
+    Mesh box = makeBox(); // for walls
 
     GLuint prog = linkProgram(kVS, kFS);
     GLint uMVP = glGetUniformLocation(prog, "uMVP");
@@ -721,6 +625,22 @@ int Game_Run() {
     }
 
     glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
+
+    // Load guard model
+    if (!gGuard.loadModel("assets/Guard.obj", "")) {
+        std::cerr << "Failed to load guard model\n";
+    }
+    else {
+        // Place guard near spawn
+        gGuard.pos = playerSpawn + glm::vec3(2.0f, 0.0f, 2.0f);
+
+        float feetHeight = -gGuard.getGroundOffset(); 
+        gGuard.pos.y = gGuard.getGroundOffset();
+
+        std::cout << "Guard spawned at (" << gGuard.pos.x << ", " << gGuard.pos.y << ", " << gGuard.pos.z << ")\n";
+        gGuard.detectionRange = 100.0f;
+    }
+
     glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
 
     // Start player at the spawn tile (eye height)
@@ -754,6 +674,8 @@ int Game_Run() {
         if (!gMapOpen) {
             processMovement(dt, colliders);
         }
+
+        gGuard.update(dt, gCam.pos, colliders);
 
         glClearColor(0.10f, 0.12f, 0.15f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -829,6 +751,8 @@ int Game_Run() {
             glBindVertexArray(0);
         }
 
+        gGuard.render(V, P, gObjProg, gObjMVP, gObjTex);
+
         // Crosshair
         drawCrosshairNDC(fbw, fbh);
 
@@ -879,6 +803,8 @@ int Game_Run() {
     glDeleteVertexArrays(1, &ground.vao); glDeleteBuffers(1, &ground.vbo);
     glDeleteVertexArrays(1, &box.vao);    glDeleteBuffers(1, &box.vbo);
     glDeleteProgram(prog);
+
+    gGuard.cleanup();
 
     UI_Shutdown();
 
