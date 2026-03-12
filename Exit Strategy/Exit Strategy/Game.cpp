@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <vector>
 #include <cmath>
 #include <sstream>
@@ -30,6 +30,14 @@
 
 static const int DEFAULT_W = 1080;
 static const int DEFAULT_H = 1920;
+
+std::string loadFile(const std::string& path)
+{
+    std::ifstream file(path);
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    return buffer.str();
+}
 
 // ---------- Camera ----------
 struct Camera {
@@ -72,19 +80,12 @@ int  gWindowedW = DEFAULT_W, gWindowedH = DEFAULT_H;
 // HUD text strings
 std::string gHudPrompt;
 
-// Simple toast message (no NPC dialogue)
+// Simple toast message
 std::string gHudToast;
 float gHudToastTimer = 0.0f;
 
 // ---------- Collision ----------
 inline AABB boxFromTS(const glm::vec3& t, const glm::vec3& s) { return AABB{ t - s, t + s }; }
-
-// ---------- NPC ----------
-struct NPC {
-    glm::vec3 pos{ -10.0f, 0.0f, 3.0f };
-    glm::vec3 half{ 0.7f, 1.2f, 0.7f };
-};
-NPC gNPC;
 
 // ---------- Input edge helper ----------
 bool pressed(GLFWwindow* w, int key) {
@@ -161,6 +162,13 @@ void toggleFullscreen() {
 
 void key_callback(GLFWwindow* w, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+
+        // If fullscreen map is open → close map instead of quitting
+        if (gMapOpen) {
+            gMapOpen = false;
+            return;
+        }
+
         if (gMouseLocked) {
             gMouseLocked = false;
             glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -168,9 +176,6 @@ void key_callback(GLFWwindow* w, int key, int, int action, int) {
         else {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
         }
-    }
-    if (key == GLFW_KEY_F11 && action == GLFW_PRESS) {
-        toggleFullscreen();
     }
 }
 
@@ -271,32 +276,115 @@ GLuint loadTexture2D(const std::string& path) {
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 
     stbi_image_free(data);
     return tex;
+}
+
+struct ModelMesh {
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLuint ebo = 0;
+    GLsizei indexCount = 0;
+};
+
+ModelMesh loadModel(const std::string& path)
+{
+    ModelMesh mesh;
+
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(
+        path,
+        aiProcess_Triangulate |
+        aiProcess_GenNormals |
+        aiProcess_FlipUVs
+    );
+
+    if (!scene || !scene->HasMeshes()) {
+        std::cout << "Failed to load model: " << path << std::endl;
+        return mesh;
+    }
+
+    aiMesh* ai_mesh = scene->mMeshes[0];
+
+    std::vector<float> vertices;
+    std::vector<unsigned int> indices;
+
+    for (unsigned int i = 0; i < ai_mesh->mNumVertices; i++) {
+        vertices.push_back(ai_mesh->mVertices[i].x);
+        vertices.push_back(ai_mesh->mVertices[i].y);
+        vertices.push_back(ai_mesh->mVertices[i].z);
+
+        vertices.push_back(ai_mesh->mNormals[i].x);
+        vertices.push_back(ai_mesh->mNormals[i].y);
+        vertices.push_back(ai_mesh->mNormals[i].z);
+    }
+
+    for (unsigned int i = 0; i < ai_mesh->mNumFaces; i++) {
+        aiFace face = ai_mesh->mFaces[i];
+        for (unsigned int j = 0; j < face.mNumIndices; j++)
+            indices.push_back(face.mIndices[j]);
+    }
+
+    glGenVertexArrays(1, &mesh.vao);
+    glGenBuffers(1, &mesh.vbo);
+    glGenBuffers(1, &mesh.ebo);
+
+    glBindVertexArray(mesh.vao);
+
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glBindVertexArray(0);
+
+    mesh.indexCount = indices.size();
+    return mesh;
 }
 
 // ---------- Meshes ----------
 struct Mesh { GLuint vao = 0, vbo = 0; GLsizei count = 0; };
 
 Mesh makeGroundPlane(float half = 50.f) {
-    float y = 0, s = half;
+    float y = 0.0f;
+    float s = half;
+
+    // position            // UVs
     float v[] = {
-        -s,y,-s, .35,.38,.40,  s,y,-s, .35,.38,.40,  s,y, s, .35,.38,.40,
-        -s,y,-s, .35,.38,.40,  s,y, s, .35,.38,.40, -s,y, s, .35,.38,.40
+        -s, y, -s,   0.0f, 0.0f,
+        s, y, -s,   64.0f, 0.0f,
+        s, y,  s,   64.0f, 64.0f,
+        
+        -s, y, -s,   0.0f, 0.0f,
+        s, y,  s,   64.0f, 64.0f,
+        -s, y,  s,   0.0f, 64.0f
     };
+
     Mesh m;
     glGenVertexArrays(1, &m.vao);
     glGenBuffers(1, &m.vbo);
     glBindVertexArray(m.vao);
     glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STATIC_DRAW);
+
+    // position
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+
+    // UV
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
     glBindVertexArray(0);
     m.count = 6;
     return m;
@@ -307,23 +395,23 @@ Mesh makeTexturedBox() {
     float v[] = {
         // positions          // UVs
         // front
-        -1,-1, 1,  0,0,   1,-1, 1,  1,0,   1, 1, 1,  1,1,
-        -1,-1, 1,  0,0,   1, 1, 1,  1,1,  -1, 1, 1,  0,1,
+        -1,-1, 1,  0,0,   1,-1, 1,  3,0,   1, 1, 1,  3,3,
+        -1,-1, 1,  0,0,   1, 1, 1,  3,3,  -1, 1, 1,  0,3,
         // back
-        -1,-1,-1,  1,0,   1,-1,-1,  0,0,   1, 1,-1,  0,1,
-        -1,-1,-1,  1,0,   1, 1,-1,  0,1,  -1, 1,-1,  1,1,
+        -1,-1,-1,  3,0,   1,-1,-1,  0,0,   1, 1,-1,  0,3,
+        -1,-1,-1,  3,0,   1, 1,-1,  0,3,  -1, 1,-1,  3,3,
         // left
-        -1,-1,-1,  0,0,  -1,-1, 1,  1,0,  -1, 1, 1,  1,1,
-        -1,-1,-1,  0,0,  -1, 1, 1,  1,1,  -1, 1,-1,  0,1,
+        -1,-1,-1,  0,0,  -1,-1, 1,  3,0,  -1, 1, 1,  3,3,
+        -1,-1,-1,  0,0,  -1, 1, 1,  3,3,  -1, 1,-1,  0,3,
         // right
-         1,-1,-1,  1,0,   1,-1, 1,  0,0,   1, 1, 1,  0,1,
-         1,-1,-1,  1,0,   1, 1, 1,  0,1,   1, 1,-1,  1,1,
+         1,-1,-1,  3,0,   1,-1, 1,  0,0,   1, 1, 1,  0,3,
+         1,-1,-1,  3,0,   1, 1, 1,  0,3,   1, 1,-1,  3,3,
          // top
-         -1, 1, 1,  0,1,   1, 1, 1,  1,1,   1, 1,-1,  1,0,
-         -1, 1, 1,  0,1,   1, 1,-1,  1,0,  -1, 1,-1,  0,0,
+         -1, 1, 1,  0,3,   1, 1, 1,  3,3,   1, 1,-1,  3,0,
+         -1, 1, 1,  0,3,   1, 1,-1,  3,0,  -1, 1,-1,  0,0,
          // bottom
-         -1,-1, 1,  0,0,   1,-1,-1,  1,1,   1,-1, 1,  1,0,
-         -1,-1, 1,  0,0,  -1,-1,-1,  0,1,   1,-1,-1,  1,1
+         -1,-1, 1,  0,0,   1,-1,-1,  3,3,   1,-1, 1,  3,0,
+         -1,-1, 1,  0,0,  -1,-1,-1,  0,3,   1,-1,-1,  3,3
     };
 
     Mesh m;
@@ -384,21 +472,38 @@ Mesh makeBox() {
     return m;
 }
 
-// ---------- World-space shader ----------
-const char* kVS = R"(#version 330 core
-layout (location=0) in vec3 aPos;
-layout (location=1) in vec3 aCol;
-uniform mat4 uMVP;
-out vec3 vCol;
-void main(){
-    vCol = aCol;
-    gl_Position = uMVP * vec4(aPos,1.0);
-})";
+Mesh makeCeilingPlane(float half = 50.0f, float y = 5.0f) {
+    float s = half;
+    float tile = 64.0f;
 
-const char* kFS = R"(#version 330 core
-in vec3 vCol;
-out vec4 FragColor;
-void main(){ FragColor = vec4(vCol,1.0); })";
+    float v[] = {
+        // positions           // UVs
+        -s, y, -s,   0.0f, 0.0f,
+        -s, y,  s,   0.0f, tile,
+         s, y,  s,   tile, tile,
+
+        -s, y, -s,   0.0f, 0.0f,
+         s, y,  s,   tile, tile,
+         s, y, -s,   tile, 0.0f
+    };
+
+    Mesh m;
+    glGenVertexArrays(1, &m.vao);
+    glGenBuffers(1, &m.vbo);
+    glBindVertexArray(m.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+
+    glBindVertexArray(0);
+    m.count = 6;
+    return m;
+}
 
 // ---------- Ray vs AABB (for NPC look-at) ----------
 float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
@@ -412,27 +517,6 @@ float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
     if (tF < 0.0f || tN > tF) return -1.0f;
     return tN;
 }
-
-//AssimpModel gNPCModel;
-const char* kObjVS = R"(#version 330 core
-layout (location=0) in vec3 aPos;
-layout (location=1) in vec2 aUV;
-uniform mat4 uMVP;
-out vec2 vUV;
-void main(){
-    vUV = aUV;
-    gl_Position = uMVP * vec4(aPos, 1.0);
-}
-)";
-
-const char* kObjFS = R"(#version 330 core
-in vec2 vUV;
-uniform sampler2D uTex;
-out vec4 FragColor;
-void main(){
-    FragColor = texture(uTex, vUV);
-}
-)";
 
 GLuint gObjProg = 0;
 GLint  gObjMVP = -1;
@@ -546,17 +630,28 @@ int Game_Run() {
     glViewport(0, 0, fbw, fbh);
     glEnable(GL_DEPTH_TEST);
 
+    ModelMesh keyModel = loadModel("assets/Key.obj");
+
     Mesh ground = makeGroundPlane(60.0f);
+    Mesh ceiling = makeCeilingPlane(60.0f, 5.0f);
     Mesh box = makeBox(); // for walls
 
-    GLuint prog = linkProgram(kVS, kFS);
+    std::string vs = loadFile("shaders/basic.vert");
+    std::string fs = loadFile("shaders/basic.frag");
+
+    GLuint prog = linkProgram(vs.c_str(), fs.c_str());
+
     GLint uMVP = glGetUniformLocation(prog, "uMVP");
 
     initCrosshair();
     initHudText();
     initMinimap();
 
-    gObjProg = linkProgram(kObjVS, kObjFS);
+    std::string objVS = loadFile("shaders/obj.vert");
+    std::string objFS = loadFile("shaders/obj.frag");
+
+    gObjProg = linkProgram(objVS.c_str(), objFS.c_str());
+
     gObjMVP = glGetUniformLocation(gObjProg, "uMVP");
     gObjTex = glGetUniformLocation(gObjProg, "uTex");
 
@@ -589,6 +684,16 @@ int Game_Run() {
     if (!brickTexture) {
         std::cerr << "Warning: Could not load brick texture, walls will be invisible?\n";
     }
+
+    GLuint floorTexture = loadTexture2D("assets/floor.png");
+    if (!floorTexture) {
+        std::cerr << "Warning: Could not load floor texture, walls will be invisible?\n";
+    }
+
+    GLuint ceilingTexture = loadTexture2D("assets/ceiling.png");
+    if (!ceilingTexture) {
+        std::cerr << "Warning: Could not load ceiling texture, ceiling will be invisible?\n";
+	}
 
     // World mapping: keep the same overall scale as before so minimap feels consistent.
     const float WORLD_SIZE = 90.0f;
@@ -624,7 +729,18 @@ int Game_Run() {
         exitKeyPos = worldFromCell(gMap.exitKey.x, gMap.exitKey.y);
     }
 
+    // Load exit key model
+    Guard exitKeyModel;
+    if (!exitKeyModel.loadModel("assets/Key.obj", "")) {
+        std::cerr << "Failed to load key model\n";
+    }
+    else {
+        exitKeyModel.pos = exitKeyPos;
+        exitKeyModel.modelScale = 0.50f; 
+    }
+
     glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
+    glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
 
     // Load guard model
     if (!gGuard.loadModel("assets/Guard.obj", "")) {
@@ -633,15 +749,21 @@ int Game_Run() {
     else {
         // Place guard near spawn
         gGuard.pos = playerSpawn + glm::vec3(2.0f, 0.0f, 2.0f);
+        gGuard.modelScale = 1.1f;
+        gGuard.detectionRange = 12.5f;
+        gGuard.loseRange = 14.0f;
+        gGuard.searchDuration = 2.5f;
 
-        float feetHeight = -gGuard.getGroundOffset(); 
-        gGuard.pos.y = gGuard.getGroundOffset();
+        gGuard.patrolPoints.clear();
+        gGuard.patrolPoints.push_back(gGuard.pos);
+        gGuard.patrolPoints.push_back(gGuard.pos + glm::vec3(6.0f, 0.0f, 0.0f));
+        gGuard.patrolPoints.push_back(gGuard.pos + glm::vec3(6.0f, 0.0f, 6.0f));
+        gGuard.patrolPoints.push_back(gGuard.pos + glm::vec3(0.0f, 0.0f, 6.0f));
 
         std::cout << "Guard spawned at (" << gGuard.pos.x << ", " << gGuard.pos.y << ", " << gGuard.pos.z << ")\n";
-        gGuard.detectionRange = 100.0f;
+        gGuard.detectionRange = 10.0f;
+        gGuard.loseRange = 16.0f;
     }
-
-    glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
 
     // Start player at the spawn tile (eye height)
     gCam.pos = glm::vec3(playerSpawn.x, kEyeHeight, playerSpawn.z);
@@ -715,14 +837,35 @@ int Game_Run() {
         };
         camForward = glm::normalize(camForward);
 
-        // Render ground
-        glUseProgram(prog);
-        {
-            glm::mat4 MVP = P * V * glm::mat4(1.0f);
-            glUniformMatrix4fv(uMVP, 1, GL_FALSE, glm::value_ptr(MVP));
-            glBindVertexArray(ground.vao);
-            glDrawArrays(GL_TRIANGLES, 0, ground.count);
-        }
+        glBindVertexArray(keyModel.vao);
+        glDrawElements(GL_TRIANGLES, keyModel.indexCount, GL_UNSIGNED_INT, 0);
+
+        // Render ground with texture
+        glUseProgram(gObjProg);
+
+        glUniform1i(gObjTex, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, floorTexture);
+
+        glm::mat4 MVP = P * V * glm::mat4(1.0f);
+        glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+
+        glBindVertexArray(ground.vao);
+        glDrawArrays(GL_TRIANGLES, 0, ground.count);
+        glBindVertexArray(0);
+
+        // Render ceiling
+        glUseProgram(gObjProg);
+        glUniform1i(gObjTex, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, ceilingTexture);
+
+        glm::mat4 ceilingMVP = P * V * glm::mat4(1.0f);
+        glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(ceilingMVP));
+
+        glBindVertexArray(ceiling.vao);
+        glDrawArrays(GL_TRIANGLES, 0, ceiling.count);
+        glBindVertexArray(0);
 
         // Render textured walls (using brick texture)
         if (brickTexture) {
@@ -751,6 +894,13 @@ int Game_Run() {
             glBindVertexArray(0);
         }
 
+        // Render exit key if not collected yet
+        if (!gMap.hasExitKey && gMap.exitKey.x > -1000) {
+            exitKeyModel.pos = glm::vec3(exitKeyPos.x, 0.3f, exitKeyPos.z); // little lift off the floor
+            exitKeyModel.yaw = (float)(glfwGetTime() * 90.0f); // spin
+            exitKeyModel.render(V, P, gObjProg, gObjMVP, gObjTex);
+        }
+
         gGuard.render(V, P, gObjProg, gObjMVP, gObjTex);
 
         // Crosshair
@@ -758,7 +908,17 @@ int Game_Run() {
 
         // Minimap or fullscreen map
         if (!gMapOpen) {
-            drawMinimap(colliders, mapColliderCount, fbw, fbh, gCam.pos, gCam.yaw);
+            drawMinimap(
+                colliders,
+                mapColliderCount,
+                fbw, fbh,
+                gCam.pos,
+                gCam.yaw,
+                playerSpawn,
+                exitKeyPos,
+                powerCellPos,
+                exitGatePos
+            );
         }
         else {
             drawFullscreenMap(colliders, mapColliderCount, fbw, fbh,
@@ -804,6 +964,7 @@ int Game_Run() {
     glDeleteVertexArrays(1, &box.vao);    glDeleteBuffers(1, &box.vbo);
     glDeleteProgram(prog);
 
+    exitKeyModel.cleanup();
     gGuard.cleanup();
 
     UI_Shutdown();

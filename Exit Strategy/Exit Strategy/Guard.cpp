@@ -199,54 +199,173 @@ bool Guard::loadModel(const std::string& objPath, const std::string& texPath) {
     return true;
 }
 
+void Guard::moveTowards(const glm::vec3& target, float moveSpeed, float dt, const std::vector<AABB>& colliders) {
+    glm::vec3 toTarget = target - pos;
+    toTarget.y = 0.0f;
+
+    float dist = glm::length(toTarget);
+    if (dist < 0.001f) return;
+
+    glm::vec3 dir = glm::normalize(toTarget);
+    glm::vec3 oldPos = pos;
+    glm::vec3 newPos = oldPos + dir * moveSpeed * dt;
+
+    const float radius = 0.6f;
+
+    float dx = newPos.x - oldPos.x;
+    for (const auto& b : colliders) {
+        float minX = b.min.x - radius;
+        float maxX = b.max.x + radius;
+        float minZ = b.min.z - radius;
+        float maxZ = b.max.z + radius;
+
+        if (newPos.z > minZ && newPos.z < maxZ) {
+            if (dx > 0 && oldPos.x <= minX && newPos.x > minX) newPos.x = minX;
+            if (dx < 0 && oldPos.x >= maxX && newPos.x < maxX) newPos.x = maxX;
+        }
+    }
+
+    float dz = newPos.z - oldPos.z;
+    for (const auto& b : colliders) {
+        float minX = b.min.x - radius;
+        float maxX = b.max.x + radius;
+        float minZ = b.min.z - radius;
+        float maxZ = b.max.z + radius;
+
+        if (newPos.x > minX && newPos.x < maxX) {
+            if (dz > 0 && oldPos.z <= minZ && newPos.z > minZ) newPos.z = minZ;
+            if (dz < 0 && oldPos.z >= maxZ && newPos.z < maxZ) newPos.z = maxZ;
+        }
+    }
+    pos = newPos;
+    yaw = glm::degrees(atan2(dir.x, dir.z));
+}
+
+bool Guard::canSeePlayer(const glm::vec3& playerPos, const std::vector<AABB>& colliders) const {
+    glm::vec3 eyePos = pos + glm::vec3(0.0f, 1.2f, 0.0f);
+    glm::vec3 targetPos = playerPos;
+    targetPos.y = eyePos.y;
+
+    glm::vec3 ray = targetPos - eyePos;
+    float maxDist = glm::length(ray);
+
+    if (maxDist <= 0.001f) return true;
+
+    glm::vec3 dir = glm::normalize(ray);
+
+    for (const auto& b : colliders) {
+        glm::vec3 t1 = (b.min - eyePos) / dir;
+        glm::vec3 t2 = (b.max - eyePos) / dir;
+
+        glm::vec3 tmin = glm::min(t1, t2);
+        glm::vec3 tmax = glm::max(t1, t2);
+
+        float tNear = std::max(std::max(tmin.x, tmin.y), tmin.z);
+        float tFar = std::min(std::min(tmax.x, tmax.y), tmax.z);
+
+        if (tFar < 0.0f || tNear > tFar) continue;
+
+        // Wall is between guard and player
+        if (tNear > 0.0f && tNear < maxDist) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void Guard::update(float dt, const glm::vec3& playerPos, const std::vector<AABB>& colliders) {
     if (!active || !model || model->meshes.empty()) return;
 
-    glm::vec3 toPlayer = playerPos - pos;
-    float dist = glm::length(toPlayer);
+    glm::vec3 flatPlayer = playerPos;
+    flatPlayer.y = pos.y;
 
-    if (dist < detectionRange && dist > 0.1f) {
-        glm::vec3 dir = glm::normalize(toPlayer);
-        glm::vec3 oldPos = pos;
+    float distToPlayer = glm::length(glm::vec3(flatPlayer.x - pos.x, 0.0f, flatPlayer.z - pos.z));
+    bool hasLOS = canSeePlayer(playerPos, colliders);
 
-        // Calculate desired new position
-        glm::vec3 newPos = oldPos + dir * speed * dt;
+    // Handle stun first
+    if (stunned) {
+        stunTimer -= dt;
+        if (stunTimer <= 0.0f) {
+            stunned = false;
+            state = GuardState::Patrol;
+        }
+        return;
+    }
 
-        const float radius = 0.6f;
+    // If player is visible and close enough, always chase
+    if (distToPlayer <= detectionRange && hasLOS) {
+        state = GuardState::Chase;
+        lastKnownPlayerPos = flatPlayer;
+        searchTimer = searchDuration;
+    }
+    else {
+        // If we were chasing and lost the player, move into Search
+        if (state == GuardState::Chase) {
+            state = GuardState::Search;
+            searchTimer = searchDuration;
+        }
+    }
 
-        // X-axis collision
-        float dx = newPos.x - oldPos.x;
-        for (const auto& b : colliders) {
-            float minX = b.min.x - radius;
-            float maxX = b.max.x + radius;
-            float minZ = b.min.z - radius;
-            float maxZ = b.max.z + radius;
+    switch (state) {
+    case GuardState::Patrol: {
+        if (patrolPoints.empty()) return;
 
-            if (newPos.z > minZ && newPos.z < maxZ) {
-                if (dx > 0 && oldPos.x <= minX && newPos.x > minX) newPos.x = minX;
-                if (dx < 0 && oldPos.x >= maxX && newPos.x < maxX) newPos.x = maxX;
+        glm::vec3 target = patrolPoints[currentPatrolIndex];
+        target.y = pos.y;
+
+        glm::vec3 delta = target - pos;
+        delta.y = 0.0f;
+        float dist = glm::length(delta);
+
+        if (dist < 0.3f) {
+            patrolWaitTimer += dt;
+            if (patrolWaitTimer >= 1.0f) {
+                patrolWaitTimer = 0.0f;
+                currentPatrolIndex = (currentPatrolIndex + 1) % patrolPoints.size();
             }
         }
+        else {
+            moveTowards(target, patrolSpeed, dt, colliders);
+        }
+        break;
+    }
 
-        // Z-axis collision
-        float dz = newPos.z - oldPos.z;
-        for (const auto& b : colliders) {
-            float minX = b.min.x - radius;
-            float maxX = b.max.x + radius;
-            float minZ = b.min.z - radius;
-            float maxZ = b.max.z + radius;
+    case GuardState::Chase: {
+        moveTowards(lastKnownPlayerPos, chaseSpeed, dt, colliders);
+        break;
+    }
 
-            if (newPos.x > minX && newPos.x < maxX) {
-                if (dz > 0 && oldPos.z <= minZ && newPos.z > minZ) newPos.z = minZ;
-                if (dz < 0 && oldPos.z >= maxZ && newPos.z < maxZ) newPos.z = maxZ;
+    case GuardState::Search: {
+        glm::vec3 target = lastKnownPlayerPos;
+        target.y = pos.y;
+
+        glm::vec3 delta = target - pos;
+        delta.y = 0.0f;
+        float dist = glm::length(delta);
+
+        // Go to last seen position first
+        if (dist > 0.3f) {
+            moveTowards(target, chaseSpeed * 0.9f, dt, colliders);
+        }
+        else {
+            // Once there, pause/search for a bit
+            searchTimer -= dt;
+
+            // Slowly rotate while "searching"
+            yaw += 60.0f * dt;
+            if (yaw > 360.0f) yaw -= 360.0f;
+
+            if (searchTimer <= 0.0f) {
+                state = GuardState::Patrol;
+                patrolWaitTimer = 0.0f;
             }
         }
+        break;
+    }
 
-        // Apply the new position
-        pos = newPos;
-
-        // Face the player
-        yaw = glm::degrees(atan2(dir.x, dir.z));
+    case GuardState::Stunned:
+        break;
     }
 }
 
@@ -256,15 +375,19 @@ void Guard::render(const glm::mat4& view, const glm::mat4& proj, GLuint shader, 
     glUseProgram(shader);
 
     glm::mat4 modelMat = glm::translate(glm::mat4(1.0f), pos);
+
+    // Rotate to face movement / player
     modelMat = glm::rotate(modelMat, glm::radians(yaw), glm::vec3(0, 1, 0));
 
-    float scale = 1.0f;
-    modelMat = glm::scale(modelMat, glm::vec3(scale));
+    // Scale model
+    modelMat = glm::scale(modelMat, glm::vec3(modelScale));
+
+    // Lift model so lowest point touches ground
+    modelMat = modelMat * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, getGroundOffset(), 0.0f));
 
     glm::mat4 mvp = proj * view * modelMat;
     glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
 
-    // Draw all mesh parts 
     model->draw();
 }
 

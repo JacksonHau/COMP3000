@@ -8,14 +8,40 @@
 
 struct AssimpModel;
 
+enum class GuardState {
+    Patrol,
+    Chase,
+    Search,
+    Stunned
+};
+
 struct Guard {
-    glm::vec3 pos;
+    glm::vec3 pos{ 0.0f };
     float yaw = 0.0f;
+
     float speed = 2.0f;
-    float detectionRange = 15.0f;
+    float patrolSpeed = 1.2f;
+    float chaseSpeed = 2.2f;
+    float detectionRange = 10.0f;
+    float loseRange = 14.0f;
+    float modelScale = 0.6f;
+
     bool active = true;
     AssimpModel* model = nullptr;
     GLuint texture = 0;
+
+    GuardState state = GuardState::Patrol;
+
+    std::vector<glm::vec3> patrolPoints;
+    int currentPatrolIndex = 0;
+    float patrolWaitTimer = 0.0f;
+
+    bool stunned = false;
+    float stunTimer = 0.0f;
+
+    glm::vec3 lastKnownPlayerPos{ 0.0f };
+    float searchTimer = 0.0f;
+    float searchDuration = 2.5f;
 
     Guard();
     ~Guard();
@@ -26,6 +52,10 @@ struct Guard {
     void cleanup();
 
     float getGroundOffset() const;
+
+private:
+    void moveTowards(const glm::vec3& target, float moveSpeed, float dt, const std::vector<AABB>& colliders);
+    bool canSeePlayer(const glm::vec3& playerPos, const std::vector<AABB>& colliders) const;
 };
 
 extern Guard gGuard;

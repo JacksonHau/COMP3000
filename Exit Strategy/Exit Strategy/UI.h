@@ -49,10 +49,17 @@ void drawTextScreen(const std::string& text,
     float scale = 1.0f);
 
 void initMinimap();
-void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount,
+void drawMinimap(
+    const std::vector<AABB>& boxes,
+    size_t boxCount,
     int fbw, int fbh,
     const glm::vec3& playerPos,
-    float playerYawDeg);
+    float playerYawDeg,
+    const glm::vec3& spawnPos,
+    const glm::vec3& exitKeyPos,
+    const glm::vec3& powerCellPos,
+    const glm::vec3& exitGatePos
+);
 
 void drawFullscreenMap(const std::vector<AABB>& colliders, size_t colliderCount,
     int fbw, int fbh,

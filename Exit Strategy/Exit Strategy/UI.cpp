@@ -213,7 +213,18 @@ void initMinimap() {
     glBindVertexArray(0);
 }
 
-void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int fbh, const glm::vec3& playerPos, float playerYawDeg) {
+void drawMinimap(
+    const std::vector<AABB>& boxes,
+    size_t boxCount,
+    int fbw, int fbh,
+    const glm::vec3& playerPos,
+    float playerYawDeg,
+    const glm::vec3& spawnPos,
+    const glm::vec3& exitKeyPos,
+    const glm::vec3& powerCellPos,
+    const glm::vec3& exitGatePos
+) 
+{
     if (!gHudProg || !gMinimapVAO || boxCount == 0) return;
 
     // Keep the minimap pixel size the same.
@@ -226,15 +237,11 @@ void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int f
     const float cxScreen = (x0 + x1) * 0.5f;
     const float cyScreen = (y0 + y1) * 0.5f;
 
-    // How much world-space we show around the player (in meters/units).
-    // Smaller = more zoomed in. Tune this one value.
+	// World coords are in a -18 to +18 range, so scale that to fit the minimap size.
     const float worldHalf = 18.0f;
     const float scale = size / (worldHalf * 2.0f);
 
-    // Camera yaw in this project: yaw=0 faces +X, yaw=90 faces +Z.
-    // Minimap screen coords: +X right, +Y down.
-    // We want the player's forward direction to always be "up" on the minimap,
-    // so rotate world by -(yaw + 90deg).
+	// Precompute sin/cos for rotating world opposite to player yaw, so the arrow can stay pointing "up".
     const float yawRad = glm::radians(playerYawDeg);
     const float a = -(yawRad + glm::half_pi<float>());
     const float c = cosf(a);
@@ -308,12 +315,50 @@ void drawMinimap(const std::vector<AABB>& boxes, size_t boxCount, int fbw, int f
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
+    // ----------- MINIMAP LABELS -----------
+    glm::vec3 labelColor(1.0f, 1.0f, 1.0f);
+    float labelScale = 1.2f;
+
+    // Spawn
+    {
+        glm::vec2 p = toMini(spawnPos.x, spawnPos.z);
+        drawTextScreen("Spawn",
+            p.x - 18, p.y - 10,
+            fbw, fbh,
+            labelColor, labelScale);
+    }
+
+    // Exit Key
+    {
+        glm::vec2 p = toMini(exitKeyPos.x, exitKeyPos.z);
+        drawTextScreen("Exit Key",
+            p.x - 28, p.y - 10,
+            fbw, fbh,
+            labelColor, labelScale);
+    }
+
+    // Power Cell
+    {
+        glm::vec2 p = toMini(powerCellPos.x, powerCellPos.z);
+        drawTextScreen("Power Cell",
+            p.x - 38, p.y - 10,
+            fbw, fbh,
+            labelColor, labelScale);
+    }
+
+    // Exit Gate
+    {
+        glm::vec2 p = toMini(exitGatePos.x, exitGatePos.z);
+        drawTextScreen("Exit Gate",
+            p.x - 35, p.y - 10,
+            fbw, fbh,
+            labelColor, labelScale);
+    }
+
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_DEPTH_TEST);
     glBindVertexArray(0);
 }
-
-
 
 void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCount,
     int fbw, int fbh,

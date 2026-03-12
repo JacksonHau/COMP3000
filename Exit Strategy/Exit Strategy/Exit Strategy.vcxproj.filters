@@ -44,10 +44,24 @@
     <ClInclude Include="Guard.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="stb_easy_font.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stb_image.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Xml Include="assets\map.xml">
       <Filter>Source Files</Filter>
     </Xml>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="glew32.dll" />
+    <None Include="glfw3.dll" />
+    <None Include="shaders\basic.vert" />
+    <None Include="shaders\basic.frag" />
+    <None Include="shaders\obj.vert" />
+    <None Include="shaders\obj.frag" />
   </ItemGroup>
 </Project>
