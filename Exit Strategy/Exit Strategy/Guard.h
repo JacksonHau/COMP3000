@@ -31,6 +31,7 @@ struct Guard {
     GLuint texture = 0;
 
     GuardState state = GuardState::Patrol;
+    bool alerted = false;
 
     std::vector<glm::vec3> patrolPoints;
     int currentPatrolIndex = 0;
@@ -42,6 +43,10 @@ struct Guard {
     glm::vec3 lastKnownPlayerPos{ 0.0f };
     float searchTimer = 0.0f;
     float searchDuration = 2.5f;
+
+    // Pathfinding
+    std::vector<glm::ivec2> currentPath;
+    float repathTimer = 0.0f;
 
     Guard();
     ~Guard();

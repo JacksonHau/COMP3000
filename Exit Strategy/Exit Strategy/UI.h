@@ -58,14 +58,20 @@ void drawMinimap(
     const glm::vec3& spawnPos,
     const glm::vec3& exitKeyPos,
     const glm::vec3& powerCellPos,
-    const glm::vec3& exitGatePos
+    const glm::vec3& exitGatePos,
+    const glm::vec3& guardPos,
+    float guardYawDeg
 );
 
-void drawFullscreenMap(const std::vector<AABB>& colliders, size_t colliderCount,
+void drawFullscreenMap(
+    const std::vector<AABB>& colliders, size_t colliderCount,
     int fbw, int fbh,
     const glm::vec3& playerSpawn,
     const glm::vec3& exitKeyPos,
     const glm::vec3& powerCellPos,
     const glm::vec3& exitGatePos,
     const glm::vec3& playerPos,
-    float playerYawDeg);
+    float playerYawDeg,
+    const glm::vec3& guardPos,
+    float guardYawDeg
+);

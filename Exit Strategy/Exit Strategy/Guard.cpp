@@ -1,13 +1,24 @@
 #include "Guard.h"
 #include "UI.h"
+#include "Map.h"
+
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+
 #include <iostream>
 #include <vector>
 #include <map>
+#include <queue>
+#include <algorithm>
+
+#include <filesystem>
+namespace fs = std::filesystem;
+
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include "stb_image.h"
 
 // ---------- Create texture from color ----------
 static GLuint createColorTexture(unsigned char r, unsigned char g, unsigned char b) {
@@ -18,6 +29,32 @@ static GLuint createColorTexture(unsigned char r, unsigned char g, unsigned char
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, color);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    return tex;
+}
+
+// ---------- Load texture from file ----------
+static GLuint loadTextureFromFile(const std::string& path) {
+    int w, h, channels;
+    stbi_set_flip_vertically_on_load(true);
+    unsigned char* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    if (!data) {
+        std::cerr << "Failed to load texture: " << path << "\n";
+        return 0;
+    }
+
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+    stbi_image_free(data);
     return tex;
 }
 
@@ -68,7 +105,6 @@ struct AssimpModel {
         overallMinY = 999999.0f;
         overallMaxY = -999999.0f;
 
-        // Process each mesh 
         for (unsigned int m = 0; m < scene->mNumMeshes; m++) {
             aiMesh* mesh = scene->mMeshes[m];
             MeshPart part;
@@ -138,20 +174,30 @@ struct AssimpModel {
             // Get material for this mesh
             if (scene->HasMaterials() && mesh->mMaterialIndex < scene->mNumMaterials) {
                 aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
-                aiColor3D diffuse(0.8f, 0.8f, 0.8f);
 
-                if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse)) {
-                    unsigned char r = (unsigned char)(diffuse.r * 255);
-                    unsigned char g = (unsigned char)(diffuse.g * 255);
-                    unsigned char b = (unsigned char)(diffuse.b * 255);
-                    part.texture = createColorTexture(r, g, b);
+                aiString texPath;
+                if (material->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
+                    std::filesystem::path objDir = std::filesystem::path(path).parent_path();
+                    std::filesystem::path fullTexPath = objDir / texPath.C_Str();
 
-                    std::cout << "Mesh " << m << " material color: RGB("
-                        << (int)r << "," << (int)g << "," << (int)b << ")\n";
+                    part.texture = loadTextureFromFile(fullTexPath.string());
+
+                    if (part.texture) {
+                        std::cout << "Loaded material texture: " << fullTexPath.string() << "\n";
+                    }
                 }
-                else {
-                    // Default gray if no color
-                    part.texture = createColorTexture(128, 128, 128);
+
+                if (!part.texture) {
+                    aiColor3D diffuse(0.8f, 0.8f, 0.8f);
+                    if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse)) {
+                        unsigned char r = (unsigned char)(diffuse.r * 255);
+                        unsigned char g = (unsigned char)(diffuse.g * 255);
+                        unsigned char b = (unsigned char)(diffuse.b * 255);
+                        part.texture = createColorTexture(r, g, b);
+                    }
+                    else {
+                        part.texture = createColorTexture(128, 128, 128);
+                    }
                 }
             }
             else {
@@ -188,6 +234,91 @@ struct AssimpModel {
     }
 };
 
+// ---------- Maze helpers for pathfinding ----------
+static bool isWallCell(int x, int z) {
+    for (const auto& w : gMap.walls) {
+        if (w.x == x && w.y == z) return true;
+    }
+    return false;
+}
+
+static glm::ivec2 worldToCell(const glm::vec3& p) {
+    const float WORLD_SIZE = 90.0f;
+    const float ORIGIN_X = -WORLD_SIZE * 0.5f;
+    const float ORIGIN_Z = -WORLD_SIZE * 0.5f;
+
+    float cellX = WORLD_SIZE / (float)gMap.width;
+    float cellZ = WORLD_SIZE / (float)gMap.height;
+
+    int cx = (int)((p.x - ORIGIN_X) / cellX);
+    int cz = (int)((p.z - ORIGIN_Z) / cellZ);
+
+    cx = glm::clamp(cx, 0, gMap.width - 1);
+    cz = glm::clamp(cz, 0, gMap.height - 1);
+    return glm::ivec2(cx, cz);
+}
+
+static glm::vec3 cellToWorld(const glm::ivec2& cell, float y) {
+    const float WORLD_SIZE = 90.0f;
+    const float ORIGIN_X = -WORLD_SIZE * 0.5f;
+    const float ORIGIN_Z = -WORLD_SIZE * 0.5f;
+
+    float cellX = WORLD_SIZE / (float)gMap.width;
+    float cellZ = WORLD_SIZE / (float)gMap.height;
+
+    float wx = ORIGIN_X + (cell.x + 0.5f) * cellX;
+    float wz = ORIGIN_Z + (cell.y + 0.5f) * cellZ;
+    return glm::vec3(wx, y, wz);
+}
+
+static std::vector<glm::ivec2> findPathBFS(glm::ivec2 start, glm::ivec2 goal) {
+    if (start == goal) return {};
+
+    std::queue<glm::ivec2> q;
+    std::vector<std::vector<bool>> visited(gMap.height, std::vector<bool>(gMap.width, false));
+    std::vector<std::vector<glm::ivec2>> parent(
+        gMap.height,
+        std::vector<glm::ivec2>(gMap.width, glm::ivec2(-1, -1))
+    );
+
+    q.push(start);
+    visited[start.y][start.x] = true;
+
+    const glm::ivec2 dirs[4] = {
+        { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }
+    };
+
+    while (!q.empty()) {
+        glm::ivec2 cur = q.front();
+        q.pop();
+
+        if (cur == goal) break;
+
+        for (const auto& d : dirs) {
+            glm::ivec2 nxt = cur + d;
+
+            if (nxt.x < 0 || nxt.x >= gMap.width || nxt.y < 0 || nxt.y >= gMap.height) continue;
+            if (visited[nxt.y][nxt.x]) continue;
+            if (isWallCell(nxt.x, nxt.y)) continue;
+
+            visited[nxt.y][nxt.x] = true;
+            parent[nxt.y][nxt.x] = cur;
+            q.push(nxt);
+        }
+    }
+
+    if (!visited[goal.y][goal.x]) {
+        return {};
+    }
+
+    std::vector<glm::ivec2> path;
+    for (glm::ivec2 cur = goal; cur != start; cur = parent[cur.y][cur.x]) {
+        path.push_back(cur);
+    }
+    std::reverse(path.begin(), path.end());
+    return path;
+}
+
 // ---------- Guard implementation ----------
 Guard::Guard() : model(new AssimpModel()) {}
 Guard::~Guard() { delete model; }
@@ -196,6 +327,19 @@ bool Guard::loadModel(const std::string& objPath, const std::string& texPath) {
     if (!model->load(objPath)) {
         return false;
     }
+
+    if (!texPath.empty()) {
+        GLuint forcedTex = loadTextureFromFile(texPath);
+        if (forcedTex) {
+            for (auto& mesh : model->meshes) {
+                if (mesh.texture) {
+                    glDeleteTextures(1, &mesh.texture);
+                }
+                mesh.texture = forcedTex;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -237,6 +381,7 @@ void Guard::moveTowards(const glm::vec3& target, float moveSpeed, float dt, cons
             if (dz < 0 && oldPos.z >= maxZ && newPos.z < maxZ) newPos.z = maxZ;
         }
     }
+
     pos = newPos;
     yaw = glm::degrees(atan2(dir.x, dir.z));
 }
@@ -288,23 +433,20 @@ void Guard::update(float dt, const glm::vec3& playerPos, const std::vector<AABB>
         stunTimer -= dt;
         if (stunTimer <= 0.0f) {
             stunned = false;
-            state = GuardState::Patrol;
+            state = alerted ? GuardState::Chase : GuardState::Patrol;
         }
         return;
     }
 
-    // If player is visible and close enough, always chase
+    // First sighting permanently alerts the guard
     if (distToPlayer <= detectionRange && hasLOS) {
+        alerted = true;
+    }
+
+    // Full no-mercy mode
+    if (alerted) {
         state = GuardState::Chase;
         lastKnownPlayerPos = flatPlayer;
-        searchTimer = searchDuration;
-    }
-    else {
-        // If we were chasing and lost the player, move into Search
-        if (state == GuardState::Chase) {
-            state = GuardState::Search;
-            searchTimer = searchDuration;
-        }
     }
 
     switch (state) {
@@ -332,37 +474,39 @@ void Guard::update(float dt, const glm::vec3& playerPos, const std::vector<AABB>
     }
 
     case GuardState::Chase: {
-        moveTowards(lastKnownPlayerPos, chaseSpeed, dt, colliders);
-        break;
-    }
+        repathTimer -= dt;
 
-    case GuardState::Search: {
-        glm::vec3 target = lastKnownPlayerPos;
-        target.y = pos.y;
+        glm::ivec2 guardCell = worldToCell(pos);
+        glm::ivec2 playerCell = worldToCell(lastKnownPlayerPos);
 
-        glm::vec3 delta = target - pos;
-        delta.y = 0.0f;
-        float dist = glm::length(delta);
-
-        // Go to last seen position first
-        if (dist > 0.3f) {
-            moveTowards(target, chaseSpeed * 0.9f, dt, colliders);
+        if (repathTimer <= 0.0f || currentPath.empty()) {
+            currentPath = findPathBFS(guardCell, playerCell);
+            repathTimer = 0.20f;
         }
-        else {
-            // Once there, pause/search for a bit
-            searchTimer -= dt;
 
-            // Slowly rotate while "searching"
-            yaw += 60.0f * dt;
-            if (yaw > 360.0f) yaw -= 360.0f;
+        if (!currentPath.empty()) {
+            glm::vec3 nextTarget = cellToWorld(currentPath.front(), pos.y);
 
-            if (searchTimer <= 0.0f) {
-                state = GuardState::Patrol;
-                patrolWaitTimer = 0.0f;
+            glm::vec3 delta = nextTarget - pos;
+            delta.y = 0.0f;
+
+            if (glm::length(delta) < 0.45f) {
+                currentPath.erase(currentPath.begin());
+            }
+            else {
+                moveTowards(nextTarget, chaseSpeed, dt, colliders);
             }
         }
+        else {
+            // Fallback if path somehow fails
+            moveTowards(lastKnownPlayerPos, chaseSpeed, dt, colliders);
+        }
         break;
     }
+
+    case GuardState::Search:
+        state = GuardState::Chase;
+        break;
 
     case GuardState::Stunned:
         break;
@@ -375,11 +519,7 @@ void Guard::render(const glm::mat4& view, const glm::mat4& proj, GLuint shader, 
     glUseProgram(shader);
 
     glm::mat4 modelMat = glm::translate(glm::mat4(1.0f), pos);
-
-    // Rotate to face movement / player
     modelMat = glm::rotate(modelMat, glm::radians(yaw), glm::vec3(0, 1, 0));
-
-    // Scale model
     modelMat = glm::scale(modelMat, glm::vec3(modelScale));
 
     // Lift model so lowest point touches ground

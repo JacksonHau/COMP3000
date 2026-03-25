@@ -7,6 +7,8 @@
 #include <fstream>
 #include <cstddef>
 #include <algorithm>
+#include <cstdlib>
+#include <ctime>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -27,6 +29,16 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+
+#include <irrKlang.h>
+using namespace irrklang;
+
+ISoundEngine* gSoundEngine = nullptr;
+bool gChaseSoundPlayed = false;
+
+irrklang::ISound* gChaseSound = nullptr;
+irrklang::ISound* gWalkSound = nullptr;
+irrklang::ISound* gRunSound = nullptr;
 
 static const int DEFAULT_W = 1080;
 static const int DEFAULT_H = 1920;
@@ -79,6 +91,19 @@ int  gWindowedW = DEFAULT_W, gWindowedH = DEFAULT_H;
 
 // HUD text strings
 std::string gHudPrompt;
+
+bool gHasPowerCell = false;
+bool gPowerCellUsed = false;
+
+// Game over state
+bool gGameOver = false;
+std::string gGameOverText = "YOU WERE CAUGHT";
+std::string gRestartText = "Press R to restart";
+
+// Win state
+bool gGameWon = false;
+std::string gWinText = "YOU ESCAPED";
+std::string gWinRestartText = "Press R to play again";
 
 // Simple toast message
 std::string gHudToast;
@@ -554,11 +579,28 @@ void resolveXZ(const glm::vec3& oldPos, glm::vec3& newPos,
     newPos = tmp2;
 }
 
+void stopFootstepSounds() {
+    if (gWalkSound) {
+        gWalkSound->stop();
+        gWalkSound->drop();
+        gWalkSound = nullptr;
+    }
+
+    if (gRunSound) {
+        gRunSound->stop();
+        gRunSound->drop();
+        gRunSound = nullptr;
+    }
+}
+
 // ---------- Movement with jump + gravity + collision ----------
 void processMovement(float dt, const std::vector<AABB>& boxes) {
+    bool sprinting =
+        glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+        glfwGetKey(gWindow, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+
     float speed = gCam.moveSpeed;
-    if (glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-        glfwGetKey(gWindow, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+    if (sprinting) {
         speed *= gCam.sprintMult;
     }
 
@@ -566,12 +608,17 @@ void processMovement(float dt, const std::vector<AABB>& boxes) {
     f = glm::normalize(f);
     glm::vec3 r = glm::normalize(glm::cross(f, glm::vec3(0, 1, 0)));
 
-    glm::vec3 vel(0);
+    glm::vec3 vel(0.0f);
     if (glfwGetKey(gWindow, GLFW_KEY_W) == GLFW_PRESS) vel += f;
     if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) vel -= f;
     if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) vel -= r;
     if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) vel += r;
-    if (glm::length(vel) > 0) vel = glm::normalize(vel) * speed;
+
+    bool isMoving = glm::length(vel) > 0.0f;
+
+    if (isMoving) {
+        vel = glm::normalize(vel) * speed;
+    }
 
     glm::vec3 oldPos = gCam.pos;
     glm::vec3 newPos = oldPos + vel * dt;
@@ -598,9 +645,94 @@ void processMovement(float dt, const std::vector<AABB>& boxes) {
     resolveXZ(oldPos, newPos, boxes, playerRadius);
 
     gCam.pos = newPos;
+
+    // Footstep audio
+    bool shouldPlayFootsteps = isMoving && gGrounded && !gGameOver && !gGameWon && !gMapOpen;
+
+    if (!shouldPlayFootsteps) {
+        stopFootstepSounds();
+        return;
+    }
+
+    if (sprinting) {
+        if (gWalkSound) {
+            gWalkSound->stop();
+            gWalkSound->drop();
+            gWalkSound = nullptr;
+        }
+
+        if (!gRunSound && gSoundEngine) {
+            gRunSound = gSoundEngine->play2D("assets/audio/run.wav", true, false, true);
+            if (gRunSound) gRunSound->setVolume(0.45f);
+        }
+    }
+    else {
+        if (gRunSound) {
+            gRunSound->stop();
+            gRunSound->drop();
+            gRunSound = nullptr;
+        }
+
+        if (!gWalkSound && gSoundEngine) {
+            gWalkSound = gSoundEngine->play2D("assets/audio/walk.wav", true, false, true);
+            if (gWalkSound) gWalkSound->setVolume(0.35f);
+        }
+    }
+}
+
+void resetLevel(const glm::vec3& playerSpawn) {
+    gCam.pos = glm::vec3(playerSpawn.x, kEyeHeight, playerSpawn.z);
+    gCam.yaw = -90.0f;
+    gCam.pitch = 0.0f;
+
+    gVelY = 0.0f;
+    gGrounded = true;
+
+    gMapOpen = false;
+    gMap.hasExitKey = false;
+
+    gHudPrompt.clear();
+    gHudToast.clear();
+    gHudToastTimer = 0.0f;
+
+    stopFootstepSounds();
+
+    gHasPowerCell = false;
+    gPowerCellUsed = false;
+
+    gChaseSoundPlayed = false;
+
+    if (gChaseSound) {
+        gChaseSound->stop();
+        gChaseSound->drop();
+        gChaseSound = nullptr;
+    }
+
+    gGameOver = false;
+    gGameWon = false;
+    gMap.hasExitKey = false;
+
+    // Reset guard
+    gGuard.alerted = false;
+    gGuard.state = GuardState::Patrol;
+    gGuard.stunned = false;
+    gGuard.stunTimer = 0.0f;
+    gGuard.currentPath.clear();
+    gGuard.repathTimer = 0.0f;
+
+    if (!gGuard.patrolPoints.empty()) {
+        gGuard.currentPatrolIndex = 0;
+        gGuard.patrolWaitTimer = 0.0f;
+        gGuard.pos = gGuard.patrolPoints[0];
+    }
+
+    gHudToast = "Find the key. Avoid the guard.";
+    gHudToastTimer = 3.0f;
 }
 
 int Game_Run() {
+    srand((unsigned int)time(0));
+
     if (!glfwInit()) { std::cerr << "GLFW init failed\n"; return 1; }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -625,6 +757,11 @@ int Game_Run() {
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) { glfwDestroyWindow(gWindow); glfwTerminate(); return 1; }
+
+    gSoundEngine = createIrrKlangDevice();
+    if (!gSoundEngine) {
+        std::cerr << "Failed to initialise irrKlang\n";
+    }
 
     int fbw, fbh; glfwGetFramebufferSize(gWindow, &fbw, &fbh);
     glViewport(0, 0, fbw, fbh);
@@ -655,7 +792,7 @@ int Game_Run() {
     gObjMVP = glGetUniformLocation(gObjProg, "uMVP");
     gObjTex = glGetUniformLocation(gObjProg, "uTex");
 
-    // ---------- Map layout: Data-driven XML ----------
+    // Map layout: Data-driven XML
     std::vector<glm::mat4> mapMats;
     std::vector<AABB> colliders;
 
@@ -729,6 +866,9 @@ int Game_Run() {
         exitKeyPos = worldFromCell(gMap.exitKey.x, gMap.exitKey.y);
     }
 
+    glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
+    glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
+
     // Load exit key model
     Guard exitKeyModel;
     if (!exitKeyModel.loadModel("assets/Key.obj", "")) {
@@ -739,20 +879,55 @@ int Game_Run() {
         exitKeyModel.modelScale = 0.50f; 
     }
 
-    glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
-    glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
+    // Load power cell model
+    Guard powerCellModel;
+    if (!powerCellModel.loadModel("assets/Power_Cell.obj", "assets/textures/EC_Power_Cell_Color_Blue.jpg")) {
+        std::cerr << "Failed to load power cell model\n";
+    }
+    else {
+        powerCellModel.pos = powerCellPos;
+        powerCellModel.modelScale = 0.35f;
+    }
 
     // Load guard model
     if (!gGuard.loadModel("assets/Guard.obj", "")) {
         std::cerr << "Failed to load guard model\n";
     }
     else {
-        // Place guard near spawn
-        gGuard.pos = playerSpawn + glm::vec3(2.0f, 0.0f, 2.0f);
+        // Random guard spawn
+        glm::vec3 guardSpawnPos;
+        while (true) {
+            int rx = rand() % gMap.width;
+            int rz = rand() % gMap.height;
+
+            // skip walls
+            bool isWall = false;
+            for (const auto& w : gMap.walls) {
+                if (w.x == rx && w.y == rz) {
+                    isWall = true;
+                    break;
+                }
+            }
+            if (isWall) continue;
+
+            glm::vec3 candidate = worldFromCell(rx, rz);
+
+            // keep distance from player spawn
+            float dist = glm::length(candidate - playerSpawn);
+            if (dist < 15.0f) continue;
+
+            guardSpawnPos = candidate;
+            break;
+        }
+
+        gGuard.pos = guardSpawnPos;
+
         gGuard.modelScale = 1.1f;
-        gGuard.detectionRange = 12.5f;
-        gGuard.loseRange = 14.0f;
-        gGuard.searchDuration = 2.5f;
+        gGuard.detectionRange = 7.0f;
+        gGuard.loseRange = 9999.0f;
+        gGuard.searchDuration = 5.0f;
+        gGuard.chaseSpeed = 4.0f;
+        gGuard.patrolSpeed = 1.0f;
 
         gGuard.patrolPoints.clear();
         gGuard.patrolPoints.push_back(gGuard.pos);
@@ -761,12 +936,12 @@ int Game_Run() {
         gGuard.patrolPoints.push_back(gGuard.pos + glm::vec3(0.0f, 0.0f, 6.0f));
 
         std::cout << "Guard spawned at (" << gGuard.pos.x << ", " << gGuard.pos.y << ", " << gGuard.pos.z << ")\n";
-        gGuard.detectionRange = 10.0f;
-        gGuard.loseRange = 16.0f;
     }
 
     // Start player at the spawn tile (eye height)
     gCam.pos = glm::vec3(playerSpawn.x, kEyeHeight, playerSpawn.z);
+    gHudToast = "Find the key. Avoid the guard.";
+    gHudToastTimer = 3.0f;
 
     // Remember how many colliders are "map"
     size_t mapColliderCount = colliders.size();
@@ -782,6 +957,11 @@ int Game_Run() {
 
         glfwPollEvents();
 
+        // R key to reset level on game over OR win
+        if ((gGameOver || gGameWon) && pressed(gWindow, GLFW_KEY_R)) {
+            resetLevel(playerSpawn);
+        }
+
         // Toggle map
         if (pressed(gWindow, GLFW_KEY_M)) {
             gMapOpen = !gMapOpen;
@@ -793,11 +973,45 @@ int Game_Run() {
         }
 
         // Disable movement when map is open
-        if (!gMapOpen) {
+        if (!gMapOpen && !gGameOver && !gGameWon) {
             processMovement(dt, colliders);
         }
 
-        gGuard.update(dt, gCam.pos, colliders);
+        if (!gGameWon) {
+            gGuard.update(dt, gCam.pos, colliders);
+
+            if (gGuard.state == GuardState::Chase && !gChaseSoundPlayed) {
+                gChaseSoundPlayed = true;
+
+                if (gSoundEngine) {
+                    gChaseSound = gSoundEngine->play2D(
+                        "assets/audio/chase.wav",
+                        false,
+                        false,
+                        true
+                    );
+                }
+            }
+        }
+
+        // Guard catch check
+        if (!gGameOver && !gGameWon) {
+            glm::vec3 diff = gGuard.pos - gCam.pos;
+            diff.y = 0.0f;
+            float catchDist = glm::length(diff);
+
+            if (catchDist < 1.2f) {
+                stopFootstepSounds();
+                gGameOver = true;
+                if (gChaseSound) {
+                    gChaseSound->stop();
+                    gChaseSound->drop();   // free memory
+                    gChaseSound = nullptr;
+                }
+                gMouseLocked = false;
+                glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+        }
 
         glClearColor(0.10f, 0.12f, 0.15f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -808,6 +1022,14 @@ int Game_Run() {
         glm::mat4 P = glm::perspective(glm::radians(gCam.fov), aspect, 0.1f, 200.0f);
 
         gHudPrompt.clear();
+
+        if (gHasPowerCell && !gGameOver && !gGameWon) {
+            gHudPrompt = "Press E to use Power Cell";
+        }
+
+        if (gGuard.state == GuardState::Chase) {
+            gHudPrompt = "RUN!";
+        }
 
         // toast countdown
         if (gHudToastTimer > 0.0f) {
@@ -826,6 +1048,76 @@ int Game_Run() {
             if (dist2 < 0.85f * 0.85f) {
                 gMap.hasExitKey = true;
                 gHudToast = "Exit Key collected!";
+                gHudToastTimer = 2.0f;
+                if (gSoundEngine) {
+                    gSoundEngine->play2D("assets/audio/pick_up.wav", false);
+                }
+            }
+        }
+
+        // Power cell pickup
+        if (!gHasPowerCell && !gPowerCellUsed) {
+            float dx = gCam.pos.x - powerCellPos.x;
+            float dz = gCam.pos.z - powerCellPos.z;
+            float dist2 = dx * dx + dz * dz;
+
+            if (dist2 < 1.0f * 1.0f) {
+                gHasPowerCell = true;
+
+                gHudToast = "Power Cell collected! Press E to use.";
+                gHudToastTimer = 2.0f;
+
+                if (gSoundEngine) {
+                    gSoundEngine->play2D("assets/audio/pick_up.wav", false);
+                }
+            }
+        }
+
+        // Use power cell from inventory
+        if (gHasPowerCell && !gPowerCellUsed && pressed(gWindow, GLFW_KEY_E)) {
+            gHasPowerCell = false;
+            gPowerCellUsed = true;
+
+            gGuard.stunned = true;
+            gGuard.stunTimer = 5.0f;
+            gGuard.state = GuardState::Stunned;
+
+            gHudToast = "Power Cell activated! Guard stunned.";
+            gHudToastTimer = 2.0f;
+
+            if (gSoundEngine) {
+                gSoundEngine->play2D("assets/audio/zap.wav", false);
+            }
+        }
+
+        // Escape / win check
+        if (!gGameWon && gMap.hasExitKey) {
+            float dx = gCam.pos.x - exitGatePos.x;
+            float dz = gCam.pos.z - exitGatePos.z;
+            float dist2 = dx * dx + dz * dz;
+
+            if (dist2 < 1.2f * 1.2f) {
+                gGameWon = true;
+
+                stopFootstepSounds();
+
+                gChaseSoundPlayed = false;
+                if (gChaseSound) {
+                    gChaseSound->stop();
+                    gChaseSound->drop();
+                    gChaseSound = nullptr;
+                }
+
+                // Stop the guard completely
+                gGuard.state = GuardState::Patrol;
+                gGuard.alerted = false;
+                gGuard.stunned = false;
+                gGuard.currentPath.clear();
+                gGuard.repathTimer = 0.0f;
+
+                gMouseLocked = false;
+                glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                gHudToast = "Escape successful!";
                 gHudToastTimer = 2.0f;
             }
         }
@@ -901,10 +1193,25 @@ int Game_Run() {
             exitKeyModel.render(V, P, gObjProg, gObjMVP, gObjTex);
         }
 
+        // Render power cell if not collected yet
+        if (!gHasPowerCell && !gPowerCellUsed) {
+            powerCellModel.pos = glm::vec3(powerCellPos.x, 0.5f, powerCellPos.z);
+            powerCellModel.yaw = (float)(glfwGetTime() * 70.0f);
+            powerCellModel.render(V, P, gObjProg, gObjMVP, gObjTex);
+        }
+
         gGuard.render(V, P, gObjProg, gObjMVP, gObjTex);
 
         // Crosshair
         drawCrosshairNDC(fbw, fbh);
+
+        glm::vec3 displayExitKeyPos = gMap.hasExitKey
+            ? glm::vec3(9999.0f, 0.0f, 9999.0f)
+            : exitKeyPos;
+
+        glm::vec3 displayPowerCellPos = (gHasPowerCell || gPowerCellUsed)
+            ? glm::vec3(9999.0f, 0.0f, 9999.0f)
+            : powerCellPos;
 
         // Minimap or fullscreen map
         if (!gMapOpen) {
@@ -915,23 +1222,34 @@ int Game_Run() {
                 gCam.pos,
                 gCam.yaw,
                 playerSpawn,
-                exitKeyPos,
-                powerCellPos,
-                exitGatePos
+                displayExitKeyPos,
+                displayPowerCellPos,
+                exitGatePos,
+                gGuard.pos,
+                gGuard.yaw
             );
         }
         else {
-            drawFullscreenMap(colliders, mapColliderCount, fbw, fbh,
-                playerSpawn, exitKeyPos, powerCellPos, exitGatePos,
-                gCam.pos, gCam.yaw);
+            drawFullscreenMap(
+                colliders, mapColliderCount, fbw, fbh,
+                playerSpawn, displayExitKeyPos, displayPowerCellPos, exitGatePos,
+                gCam.pos, gCam.yaw,
+                gGuard.pos, gGuard.yaw
+            );
         }
 
         // HUD text
         if (!gHudPrompt.empty()) {
             float promptY = fbh * 0.28f;
             float promptX = fbw * 0.5f - (gHudPrompt.size() * 4.0f);
+
+            glm::vec3 promptColor = glm::vec3(1.0f, 1.0f, 0.7f);
+            if (gHudPrompt == "RUN!") {
+                promptColor = glm::vec3(1.0f, 0.2f, 0.2f);
+            }
+
             drawTextScreen(gHudPrompt, promptX, promptY, fbw, fbh,
-                glm::vec3(1.0f, 1.0f, 0.7f), 2.5f);
+                promptColor, 2.5f);
         }
 
         if (!gHudToast.empty()) {
@@ -941,6 +1259,33 @@ int Game_Run() {
                 glm::vec3(0.7f, 1.0f, 0.7f), 2.5f);
         }
 
+        if (gGameOver) {
+            float titleY = fbh * 0.40f;
+            float titleX = fbw * 0.5f - (gGameOverText.size() * 10.0f);
+
+            drawTextScreen(gGameOverText, titleX, titleY, fbw, fbh,
+                glm::vec3(1.0f, 0.2f, 0.2f), 4.0f);
+
+            float subY = fbh * 0.48f;
+            float subX = fbw * 0.5f - (gRestartText.size() * 5.0f);
+
+            drawTextScreen(gRestartText, subX, subY, fbw, fbh,
+                glm::vec3(1.0f, 1.0f, 1.0f), 2.5f);
+        }
+
+        if (gGameWon) {
+            float titleY = fbh * 0.40f;
+            float titleX = fbw * 0.5f - (gWinText.size() * 10.0f);
+
+            drawTextScreen(gWinText, titleX, titleY, fbw, fbh,
+                glm::vec3(0.2f, 1.0f, 0.3f), 4.0f);
+
+            float subY = fbh * 0.48f;
+            float subX = fbw * 0.5f - (gWinRestartText.size() * 5.0f);
+
+            drawTextScreen(gWinRestartText, subX, subY, fbw, fbh,
+                glm::vec3(1.0f, 1.0f, 1.0f), 2.5f);
+        }
 
         glfwSwapBuffers(gWindow);
 
@@ -964,8 +1309,15 @@ int Game_Run() {
     glDeleteVertexArrays(1, &box.vao);    glDeleteBuffers(1, &box.vbo);
     glDeleteProgram(prog);
 
+    if (gSoundEngine) {
+        gSoundEngine->drop();
+    }
+
     exitKeyModel.cleanup();
+    powerCellModel.cleanup();
     gGuard.cleanup();
+
+    stopFootstepSounds();
 
     UI_Shutdown();
 

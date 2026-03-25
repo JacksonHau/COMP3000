@@ -222,8 +222,10 @@ void drawMinimap(
     const glm::vec3& spawnPos,
     const glm::vec3& exitKeyPos,
     const glm::vec3& powerCellPos,
-    const glm::vec3& exitGatePos
-) 
+    const glm::vec3& exitGatePos,
+    const glm::vec3& guardPos,
+    float guardYawDeg
+)
 {
     if (!gHudProg || !gMinimapVAO || boxCount == 0) return;
 
@@ -315,6 +317,23 @@ void drawMinimap(
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
+    // Guard marker on minimap
+    {
+        glm::vec2 gp = toMini(guardPos.x, guardPos.z);
+
+        float guardSize = 6.0f;
+        float enemyVerts[8] = {
+            gp.x - guardSize, gp.y - guardSize,
+            gp.x + guardSize, gp.y - guardSize,
+            gp.x + guardSize, gp.y + guardSize,
+            gp.x - guardSize, gp.y + guardSize
+        };
+
+        glBufferData(GL_ARRAY_BUFFER, sizeof(enemyVerts), enemyVerts, GL_DYNAMIC_DRAW);
+        glUniform3f(gHudColorLoc, 1.0f, 0.15f, 0.15f); // red
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    }
+
     // ----------- MINIMAP LABELS -----------
     glm::vec3 labelColor(1.0f, 1.0f, 1.0f);
     float labelScale = 1.2f;
@@ -367,7 +386,9 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     const glm::vec3& powerCellPos,
     const glm::vec3& exitGatePos,
     const glm::vec3& playerPos,
-    float playerYawDeg)
+    float playerYawDeg,
+    const glm::vec3& guardPos,
+    float guardYawDeg)
 {
     glDisable(GL_DEPTH_TEST);
 
@@ -476,6 +497,13 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
             fbw, fbh,
             labelColor, labelScale);
     }
+
+    // Rebind minimap geometry buffers after text drawing
+    glUseProgram(gHudProg);
+    glUniform2f(gHudScreenSizeLoc, (float)fbw, (float)fbh);
+    glBindVertexArray(gMinimapVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, gMinimapVBO);
+
     // Player arrow on map
     {
         float px = playerPos.x;
@@ -504,6 +532,35 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
 
         glUniform3f(gHudColorLoc, 1.0f, 0.95f, 0.3f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    // Guard marker on fullscreen map
+    {
+        glm::vec2 gp = MapWorldToScreen(
+            guardPos.x, guardPos.z,
+            x0, y0, scale, worldHalf, gMapCenter
+        );
+
+        // Guard marker (RED SQUARE)
+        {
+            glm::vec2 gp = MapWorldToScreen(
+                guardPos.x, guardPos.z,
+                x0, y0, scale, worldHalf, gMapCenter
+            );
+
+            float size = 10.0f;
+
+            float verts[8] = {
+                gp.x - size, gp.y - size,
+                gp.x + size, gp.y - size,
+                gp.x + size, gp.y + size,
+                gp.x - size, gp.y + size
+            };
+
+            glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+            glUniform3f(gHudColorLoc, 1.0f, 0.0f, 0.0f); // red
+            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+        }
     }
 
     // Hint text (can stay top-left)

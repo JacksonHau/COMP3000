@@ -102,13 +102,14 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\include;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\include;$(SolutionDir)\External\glm\include;$(SolutionDir)\External\assimp_x64-windows\include;$(SolutionDir)\External\tinyxml\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\include;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\include;$(SolutionDir)\External\glm\include;$(SolutionDir)\External\assimp_x64-windows\include;$(SolutionDir)\External\tinyxml\include;$(SolutionDir)\External\irrKlang\irrKlang-master\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\lib\Release\x64;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glew32.lib;glfw3.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\lib\Release\x64;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\lib-vc2022;$(SolutionDir)\External\assimp\lib;$(SolutionDir)\External\irrKlang\irrKlang-master\lib\Winx64-visualStudio;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opengl32.lib;glew32.lib;glfw3.lib;irrKlang.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -119,13 +120,14 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\include;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\include;$(SolutionDir)\External\glm\include;$(SolutionDir)\External\assimp_x64-windows\include;$(SolutionDir)\External\tinyxml\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\include;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\include;$(SolutionDir)\External\glm\include;$(SolutionDir)\External\assimp_x64-windows\include;$(SolutionDir)\External\tinyxml\include;$(SolutionDir)\External\irrKlang\irrKlang-master\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\lib\Release\x64;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\lib-vc2022;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>opengl32.lib;glew32.lib;glfw3.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)\External\GLEW\glew-2.1.0\lib\Release\x64;$(SolutionDir)\External\GLFW\glfw-3.4.bin.WIN64\lib-vc2022;$(SolutionDir)\External\assimp\lib;$(SolutionDir)\External\irrKlang\irrKlang-master\lib\Winx64-visualStudio;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>opengl32.lib;glew32.lib;glfw3.lib;irrKlang.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
