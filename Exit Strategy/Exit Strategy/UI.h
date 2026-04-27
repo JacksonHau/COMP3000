@@ -59,8 +59,7 @@ void drawMinimap(
     const glm::vec3& exitKeyPos,
     const glm::vec3& powerCellPos,
     const glm::vec3& exitGatePos,
-    const glm::vec3& guardPos,
-    float guardYawDeg
+    const std::vector<glm::vec3>& guardPositions
 );
 
 void drawFullscreenMap(
@@ -72,6 +71,5 @@ void drawFullscreenMap(
     const glm::vec3& exitGatePos,
     const glm::vec3& playerPos,
     float playerYawDeg,
-    const glm::vec3& guardPos,
-    float guardYawDeg
+    const std::vector<glm::vec3>& guardPositions
 );

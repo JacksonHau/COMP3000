@@ -540,4 +540,4 @@ float Guard::getGroundOffset() const {
     return -model->overallMinY;
 }
 
-Guard gGuard;
+std::vector<Guard> gGuards;

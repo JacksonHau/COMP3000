@@ -63,4 +63,4 @@ private:
     bool canSeePlayer(const glm::vec3& playerPos, const std::vector<AABB>& colliders) const;
 };
 
-extern Guard gGuard;
+extern std::vector<Guard> gGuards;

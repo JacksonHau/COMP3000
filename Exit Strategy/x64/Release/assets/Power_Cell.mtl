@@ -1,0 +1,14 @@
+# Blender 4.5.4 LTS MTL File: 'None'
+# www.blender.org
+
+newmtl Power_Cell
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd textures/EC_Power_Cell_Color_Blue.jpg
+map_Ns textures/EC_Power_Cell_Roughness.jpg
+map_refl textures/EC_Power_Cell_Metallic.jpg
+map_Ke textures/EC_Power_Cell_Emission_Blue.jpg
+map_Bump -bm 1.000000 textures/EC_Power_Cell_Normal.jpg

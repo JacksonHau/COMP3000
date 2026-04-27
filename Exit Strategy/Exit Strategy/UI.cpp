@@ -223,8 +223,7 @@ void drawMinimap(
     const glm::vec3& exitKeyPos,
     const glm::vec3& powerCellPos,
     const glm::vec3& exitGatePos,
-    const glm::vec3& guardPos,
-    float guardYawDeg
+    const std::vector<glm::vec3>& guardPositions
 )
 {
     if (!gHudProg || !gMinimapVAO || boxCount == 0) return;
@@ -297,7 +296,7 @@ void drawMinimap(
             p3.x, p3.y
         };
         glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
-        glUniform3f(gHudColorLoc, 0.25f, 0.8f, 0.9f);
+        glUniform3f(gHudColorLoc, 0.18f, 0.55f, 0.65f);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
@@ -317,8 +316,8 @@ void drawMinimap(
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
-    // Guard marker on minimap
-    {
+    // Guard markers on minimap
+    for (const glm::vec3& guardPos : guardPositions) {
         glm::vec2 gp = toMini(guardPos.x, guardPos.z);
 
         float guardSize = 6.0f;
@@ -330,7 +329,7 @@ void drawMinimap(
         };
 
         glBufferData(GL_ARRAY_BUFFER, sizeof(enemyVerts), enemyVerts, GL_DYNAMIC_DRAW);
-        glUniform3f(gHudColorLoc, 1.0f, 0.15f, 0.15f); // red
+        glUniform3f(gHudColorLoc, 1.0f, 0.15f, 0.15f);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
@@ -387,8 +386,7 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     const glm::vec3& exitGatePos,
     const glm::vec3& playerPos,
     float playerYawDeg,
-    const glm::vec3& guardPos,
-    float guardYawDeg)
+    const std::vector<glm::vec3>& guardPositions)
 {
     glDisable(GL_DEPTH_TEST);
 
@@ -413,7 +411,7 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     }
 
     // ----- Centered square map with zoom -----
-    const float BASE_WORLD_HALF = 30.0f;
+    const float BASE_WORLD_HALF = 50.0f;
 
     // Zoom in = see smaller chunk of world, so effective half range shrinks
     float worldHalf = BASE_WORLD_HALF / gMapZoom;
@@ -462,7 +460,7 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     // ----------- LABELS ON MAP -----------
 
     glm::vec3 labelColor(1.0f, 1.0f, 1.0f);
-    float labelScale = 2.0f;
+    float labelScale = 1.3f;
 
     // Player spawn
     {
@@ -534,33 +532,25 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
 
-    // Guard marker on fullscreen map
-    {
+    // Guard markers on fullscreen map
+    for (const glm::vec3& guardPos : guardPositions) {
         glm::vec2 gp = MapWorldToScreen(
             guardPos.x, guardPos.z,
             x0, y0, scale, worldHalf, gMapCenter
         );
 
-        // Guard marker (RED SQUARE)
-        {
-            glm::vec2 gp = MapWorldToScreen(
-                guardPos.x, guardPos.z,
-                x0, y0, scale, worldHalf, gMapCenter
-            );
+        float size = 10.0f;
 
-            float size = 10.0f;
+        float verts[8] = {
+            gp.x - size, gp.y - size,
+            gp.x + size, gp.y - size,
+            gp.x + size, gp.y + size,
+            gp.x - size, gp.y + size
+        };
 
-            float verts[8] = {
-                gp.x - size, gp.y - size,
-                gp.x + size, gp.y - size,
-                gp.x + size, gp.y + size,
-                gp.x - size, gp.y + size
-            };
-
-            glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
-            glUniform3f(gHudColorLoc, 1.0f, 0.0f, 0.0f); // red
-            glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-        }
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+        glUniform3f(gHudColorLoc, 1.0f, 0.0f, 0.0f);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
     }
 
     // Hint text (can stay top-left)
