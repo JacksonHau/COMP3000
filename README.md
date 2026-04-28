@@ -7,6 +7,8 @@ Wall: https://opengameart.org/content/old-brick-wall-texture
 
 Power Cell: https://skfb.ly/oCBZG
 
+Exit Door: https://skfb.ly/6WtSP
+
 ## Sound effets/music used:
 Walking: https://pixabay.com/sound-effects/film-special-effects-wallking-in-heels-on-concrete-268481/
 
