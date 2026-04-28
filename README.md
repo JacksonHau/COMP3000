@@ -7,6 +7,8 @@ Wall: https://opengameart.org/content/old-brick-wall-texture
 
 Power Cell: https://skfb.ly/oCBZG
 
+Torch: https://skfb.ly/6AR9T
+
 Exit Door: https://skfb.ly/6WtSP
 
 ## Sound effets/music used:
