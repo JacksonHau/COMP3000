@@ -923,6 +923,17 @@ int Game_Run() {
         powerCellModel.modelScale = 0.35f;
     }
 
+    // Load exit door model
+    Guard exitSignModel;
+    if (!exitSignModel.loadModel("assets/exitdoor.obj", "")) {
+        std::cerr << "Failed to load exit door model\n";
+    }
+    else {
+        exitSignModel.pos = exitGatePos;
+        exitSignModel.modelScale = 0.5f;
+        exitSignModel.yaw = 180.0f;
+    }
+
     // Load guards
     gGuards.clear();
     gGuards.reserve(cfg.guardCount);
@@ -1056,9 +1067,11 @@ int Game_Run() {
         powerCellPos = levelWorldFromCell(gMap.powerCell.x, gMap.powerCell.y);
         exitGatePos = levelWorldFromCell(gMap.exit.x, gMap.exit.y);
 
-        // Move models to the new generated positions
+        // Models positions
         exitKeyModel.pos = exitKeyPos;
         powerCellModel.pos = powerCellPos;
+        exitSignModel.pos = exitGatePos;
+        exitSignModel.yaw = 180.0f;
 
         // Spawn guards for this level
         gGuards.reserve(level.guardCount);
@@ -1252,7 +1265,7 @@ int Game_Run() {
             processMovement(dt, colliders);
         }
 
-        if (!gGameWon && !gShowLevelComplete && !gShowFinalComic) {
+        if (!gGameOver && !gGameWon && !gShowLevelComplete && !gShowFinalComic) {
             for (auto& guard : gGuards) {
                 guard.update(dt, gCam.pos, colliders);
             }
@@ -1266,7 +1279,7 @@ int Game_Run() {
             }
         }
 
-        if (anyGuardChasing && !gChaseSoundPlayed) {
+        if (!gGameOver && !gGameWon && anyGuardChasing && !gChaseSoundPlayed) {
             gChaseSoundPlayed = true;
 
             if (gSoundEngine) {
@@ -1284,13 +1297,26 @@ int Game_Run() {
             for (auto& guard : gGuards) {
                 glm::vec3 diff = guard.pos - gCam.pos;
                 float distXZ2 = diff.x * diff.x + diff.z * diff.z;
+
                 if (distXZ2 < 1.2f * 1.2f) {
                     gGameOver = true;
+
                     gMouseLocked = false;
                     glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
                     gHudToast = "You were caught!";
                     gHudToastTimer = 2.0f;
+
                     stopFootstepSounds();
+
+                    if (gChaseSound) {
+                        gChaseSound->stop();
+                        gChaseSound->drop();
+                        gChaseSound = nullptr;
+                    }
+
+                    gChaseSoundPlayed = false;
+
                     break;
                 }
             }
@@ -1518,6 +1544,11 @@ int Game_Run() {
             powerCellModel.render(V, P, gObjProg, gObjMVP, gObjTex);
         }
 
+        // Render exit door
+        exitSignModel.pos = glm::vec3(exitGatePos.x, 0.0f, exitGatePos.z);
+        exitSignModel.yaw = 180.0f;
+        exitSignModel.render(V, P, gObjProg, gObjMVP, gObjTex);
+
         for (auto& guard : gGuards) {
             guard.render(V, P, gObjProg, gObjMVP, gObjTex);
         }
@@ -1648,6 +1679,7 @@ int Game_Run() {
 
     exitKeyModel.cleanup();
     powerCellModel.cleanup();
+    exitSignModel.cleanup();
 
     for (auto& guard : gGuards) {
         guard.cleanup();
