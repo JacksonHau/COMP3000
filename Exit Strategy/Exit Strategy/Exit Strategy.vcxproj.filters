@@ -63,5 +63,7 @@
     <None Include="shaders\basic.frag" />
     <None Include="shaders\obj.vert" />
     <None Include="shaders\obj.frag" />
+    <None Include="shaders\story_screen.vert" />
+    <None Include="shaders\story_screen.frag" />
   </ItemGroup>
 </Project>

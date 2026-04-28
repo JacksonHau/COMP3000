@@ -526,6 +526,12 @@ void Guard::render(const glm::mat4& view, const glm::mat4& proj, GLuint shader, 
     modelMat = modelMat * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, getGroundOffset(), 0.0f));
 
     glm::mat4 mvp = proj * view * modelMat;
+
+    GLint modelLoc = glGetUniformLocation(shader, "uModel");
+    if (modelLoc >= 0) {
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(modelMat));
+    }
+
     glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
 
     model->draw();

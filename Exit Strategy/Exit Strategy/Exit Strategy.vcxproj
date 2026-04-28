@@ -158,6 +158,8 @@
     <None Include="shaders\basic.vert" />
     <None Include="shaders\obj.frag" />
     <None Include="shaders\obj.vert" />
+    <None Include="shaders\story_screen.frag" />
+    <None Include="shaders\story_screen.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

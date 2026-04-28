@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <ctime>
+#include <random>
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -98,6 +99,16 @@ std::string gHudPrompt;
 bool gHasPowerCell = false;
 bool gPowerCellUsed = false;
 
+struct WallTorch {
+    glm::vec3 pos;
+    float yaw;
+};
+
+std::vector<WallTorch> gWallTorches;
+
+const int MAX_TORCH_LIGHTS = 8;
+const int MAX_WALL_TORCHES = 120;
+
 // Intro state
 bool gShowIntro = true;
 
@@ -107,6 +118,12 @@ std::string gIntroLine2 = "Find the key. Avoid the guard. Escape.";
 std::string gIntroStartText = "Press ENTER to begin";
 
 std::string gWinStoryText = "Maze Grid sector cleared.";
+
+GLuint gIntroStoryTex = 0;
+GLuint gFinalStoryTex = 0;
+
+GLuint gStoryProg = 0;
+GLint gStoryTexLoc = -1;
 
 // Game over state
 bool gGameOver = false;
@@ -351,6 +368,72 @@ GLuint loadTexture2D(const std::string& path) {
     return tex;
 }
 
+void drawFullscreenTexture(GLuint texture) {
+    if (!texture || !gStoryProg) return;
+
+    static GLuint vao = 0;
+    static GLuint vbo = 0;
+
+    if (vao == 0) {
+        float verts[] = {
+            // pos        // uv
+            -1.0f, -1.0f, 0.0f, 0.0f,
+             1.0f, -1.0f, 1.0f, 0.0f,
+             1.0f,  1.0f, 1.0f, 1.0f,
+
+            -1.0f, -1.0f, 0.0f, 0.0f,
+             1.0f,  1.0f, 1.0f, 1.0f,
+            -1.0f,  1.0f, 0.0f, 1.0f
+        };
+
+        glGenVertexArrays(1, &vao);
+        glGenBuffers(1, &vbo);
+
+        glBindVertexArray(vao);
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+
+        glVertexAttribPointer(
+            0,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            4 * sizeof(float),
+            (void*)0
+        );
+        glEnableVertexAttribArray(0);
+
+        glVertexAttribPointer(
+            1,
+            2,
+            GL_FLOAT,
+            GL_FALSE,
+            4 * sizeof(float),
+            (void*)(2 * sizeof(float))
+        );
+        glEnableVertexAttribArray(1);
+
+        glBindVertexArray(0);
+    }
+
+    glDisable(GL_DEPTH_TEST);
+
+    glUseProgram(gStoryProg);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(gStoryTexLoc, 0);
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    glUseProgram(0);
+
+    glEnable(GL_DEPTH_TEST);
+}
+
 struct ModelMesh {
     GLuint vao = 0;
     GLuint vbo = 0;
@@ -589,6 +672,13 @@ float rayAABB(const glm::vec3& ro, const glm::vec3& rd, const AABB& b) {
 GLuint gObjProg = 0;
 GLint  gObjMVP = -1;
 GLint  gObjTex = -1;
+GLint  gObjModel = -1;
+
+GLint  gObjTorchCount = -1;
+GLint  gObjTorchPos = -1;
+GLint  gObjTorchColor = -1;
+GLint  gObjTorchRadius = -1;
+GLint  gObjAmbient = -1;
 
 // ---------- Collision resolution in XZ ----------
 void resolveXZ(const glm::vec3& oldPos, glm::vec3& newPos,
@@ -831,6 +921,19 @@ int Game_Run() {
 
     gObjMVP = glGetUniformLocation(gObjProg, "uMVP");
     gObjTex = glGetUniformLocation(gObjProg, "uTex");
+    gObjModel = glGetUniformLocation(gObjProg, "uModel");
+
+    gObjTorchCount = glGetUniformLocation(gObjProg, "uTorchCount");
+    gObjTorchPos = glGetUniformLocation(gObjProg, "uTorchPos[0]");
+    gObjTorchColor = glGetUniformLocation(gObjProg, "uTorchColor[0]");
+    gObjTorchRadius = glGetUniformLocation(gObjProg, "uTorchRadius[0]");
+    gObjAmbient = glGetUniformLocation(gObjProg, "uAmbient");
+
+    std::string storyVS = loadFile("shaders/story_screen.vert");
+    std::string storyFS = loadFile("shaders/story_screen.frag");
+
+    gStoryProg = linkProgram(storyVS.c_str(), storyFS.c_str());
+    gStoryTexLoc = glGetUniformLocation(gStoryProg, "uTex");
 
     // Map layout: Data-driven XML
     std::vector<glm::mat4> mapMats;
@@ -864,7 +967,8 @@ int Game_Run() {
         std::cerr << "Warning: Could not load ceiling texture, ceiling will be invisible?\n";
     }
 
-    gFinalComicTex = loadTexture2D("assets/final_comic.png");
+    gIntroStoryTex = loadTexture2D("assets/intro_story.png");
+    gFinalStoryTex = loadTexture2D("assets/final_story.png");
 
     // World mapping: keep the same overall scale as before so minimap feels consistent.
     const float WORLD_SIZE = 90.0f;
@@ -903,6 +1007,81 @@ int Game_Run() {
     glm::vec3 powerCellPos = worldFromCell(gMap.powerCell.x, gMap.powerCell.y);
     glm::vec3 exitGatePos = worldFromCell(gMap.exit.x, gMap.exit.y);
 
+    auto isWallCellLocal = [&](int cx, int cz) -> bool {
+        for (const auto& w : gMap.walls) {
+            if (w.x == cx && w.y == cz) {
+                return true;
+            }
+        }
+        return false;
+        };
+
+    auto addTorchAtWall = [&](int floorX, int floorZ, int wallDx, int wallDz) {
+        if ((int)gWallTorches.size() >= MAX_WALL_TORCHES) return;
+
+        int wx = floorX + wallDx;
+        int wz = floorZ + wallDz;
+
+        if (wx < 0 || wx >= gMap.width || wz < 0 || wz >= gMap.height) return;
+        if (!isWallCellLocal(wx, wz)) return;
+
+        glm::vec3 base = worldFromCell(floorX, floorZ);
+
+        glm::vec3 pos = base + glm::vec3(
+            wallDx * CELL_X * 0.5f,
+            2.5f,
+            wallDz * CELL_Z * 0.5f
+        );
+
+        // prevent duplicate torches in same place
+        for (const auto& existing : gWallTorches) {
+            glm::vec2 a(existing.pos.x, existing.pos.z);
+            glm::vec2 b(pos.x, pos.z);
+            if (glm::distance(a, b) < 0.2f) {
+                return;
+            }
+        }
+
+        glm::vec3 faceDir = glm::vec3(-wallDx, 0.0f, -wallDz);
+
+        WallTorch torch;
+        torch.pos = pos;
+        torch.yaw = glm::degrees(atan2(faceDir.x, faceDir.z));
+
+        gWallTorches.push_back(torch);
+        };
+
+    gWallTorches.clear();
+
+    const int TORCH_SPACING = 2; 
+
+    for (int z = 1; z < gMap.height - 1; z++) {
+        for (int x = 1; x < gMap.width - 1; x++) {
+            if (isWallCellLocal(x, z)) continue;
+
+            bool wallL = isWallCellLocal(x - 1, z);
+            bool wallR = isWallCellLocal(x + 1, z);
+            bool wallU = isWallCellLocal(x, z - 1);
+            bool wallD = isWallCellLocal(x, z + 1);
+
+            if (((x + z) % TORCH_SPACING) != 0) continue;
+
+            // torches on left and right walls
+            if (wallL && wallR && !wallU && !wallD) {
+                addTorchAtWall(x, z, -1, 0);
+                addTorchAtWall(x, z, 1, 0);
+            }
+
+            // torches on top and bottom walls
+            else if (wallU && wallD && !wallL && !wallR) {
+                addTorchAtWall(x, z, 0, -1);
+                addTorchAtWall(x, z, 0, 1);
+            }
+        }
+    }
+
+    std::cout << "Wall torches placed: " << gWallTorches.size() << "\n";
+
     // Load exit key model
     Guard exitKeyModel;
     if (!exitKeyModel.loadModel("assets/Key.obj", "")) {
@@ -921,6 +1100,15 @@ int Game_Run() {
     else {
         powerCellModel.pos = powerCellPos;
         powerCellModel.modelScale = 0.35f;
+    }
+
+    // Load wall torch model
+    Guard wallTorchModel;
+    if (!wallTorchModel.loadModel("assets/torch.obj", "")) {
+        std::cerr << "Failed to load wall torch model\n";
+    }
+    else {
+        wallTorchModel.modelScale = 0.85f;
     }
 
     // Load exit door model
@@ -1166,7 +1354,7 @@ int Game_Run() {
 
         glfwPollEvents();
 
-        // Add intro
+        // Intro story screen
         if (gShowIntro) {
             if (pressed(gWindow, GLFW_KEY_ENTER)) {
                 gShowIntro = false;
@@ -1177,32 +1365,48 @@ int Game_Run() {
                 gHudToast = "Find the key. Avoid the guard.";
                 gHudToastTimer = 3.0f;
             }
-
             else {
                 glfwGetFramebufferSize(gWindow, &fbw, &fbh);
 
-                glClearColor(0.05f, 0.06f, 0.08f, 1.0f);
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                float titleY = fbh * 0.28f;
-                float titleX = fbw * 0.5f - (gIntroTitle.size() * 10.0f);
-                drawTextScreen(gIntroTitle, titleX, titleY, fbw, fbh,
-                    glm::vec3(0.9f, 1.0f, 0.9f), 4.0f);
+                drawFullscreenTexture(gIntroStoryTex);
 
-                float line1Y = fbh * 0.40f;
-                float line1X = fbw * 0.5f - (gIntroLine1.size() * 5.0f);
-                drawTextScreen(gIntroLine1, line1X, line1Y, fbw, fbh,
-                    glm::vec3(1.0f, 1.0f, 1.0f), 2.2f);
+                std::string startText = "Press ENTER to begin";
+                float startY = fbh * 0.92f;
+                float startX = fbw * 0.5f - (startText.size() * 5.0f);
 
-                float line2Y = fbh * 0.46f;
-                float line2X = fbw * 0.5f - (gIntroLine2.size() * 5.0f);
-                drawTextScreen(gIntroLine2, line2X, line2Y, fbw, fbh,
-                    glm::vec3(0.8f, 0.95f, 1.0f), 2.2f);
+                drawTextScreen(startText, startX, startY, fbw, fbh,
+                    glm::vec3(0.9f, 0.95f, 1.0f), 2.0f);
 
-                float startY = fbh * 0.60f;
-                float startX = fbw * 0.5f - (gIntroStartText.size() * 5.0f);
-                drawTextScreen(gIntroStartText, startX, startY, fbw, fbh,
-                    glm::vec3(0.7f, 1.0f, 0.7f), 2.0f);
+                glfwSwapBuffers(gWindow);
+                continue;
+            }
+        }
+
+        // Final story screen after Level 4
+        if (gShowFinalComic) {
+            if (pressed(gWindow, GLFW_KEY_R)) {
+                gCurrentLevel = 0;
+                gShowFinalComic = false;
+                gGameWon = false;
+                loadCurrentGeneratedLevel();
+            }
+            else {
+                glfwGetFramebufferSize(gWindow, &fbw, &fbh);
+
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+                drawFullscreenTexture(gFinalStoryTex);
+
+                std::string restartText = "Press R to restart";
+                float restartY = fbh * 0.92f;
+                float restartX = fbw * 0.5f - (restartText.size() * 5.0f);
+
+                drawTextScreen(restartText, restartX, restartY, fbw, fbh,
+                    glm::vec3(0.9f, 0.95f, 1.0f), 2.0f);
 
                 glfwSwapBuffers(gWindow);
                 continue;
@@ -1322,13 +1526,65 @@ int Game_Run() {
             }
         }
 
-        glClearColor(0.10f, 0.12f, 0.15f, 1.0f);
+        glClearColor(0.005f, 0.005f, 0.008f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         glm::mat4 V = gCam.getView();
         glfwGetFramebufferSize(gWindow, &fbw, &fbh);
         float aspect = fbh > 0 ? float(fbw) / float(fbh) : 16.f / 9.f;
         glm::mat4 P = glm::perspective(glm::radians(gCam.fov), aspect, 0.1f, 200.0f);
+
+        glUseProgram(gObjProg);
+
+        std::vector<int> nearestTorchIndexes;
+        nearestTorchIndexes.reserve(gWallTorches.size());
+
+        for (int i = 0; i < (int)gWallTorches.size(); i++) {
+            nearestTorchIndexes.push_back(i);
+        }
+
+        // Sort torches by distance to player
+        std::sort(nearestTorchIndexes.begin(), nearestTorchIndexes.end(),
+            [&](int a, int b) {
+                glm::vec2 playerXZ(gCam.pos.x, gCam.pos.z);
+
+                glm::vec2 torchAXZ(gWallTorches[a].pos.x, gWallTorches[a].pos.z);
+                glm::vec2 torchBXZ(gWallTorches[b].pos.x, gWallTorches[b].pos.z);
+
+                return glm::distance(playerXZ, torchAXZ) < glm::distance(playerXZ, torchBXZ);
+            }
+        );
+
+        int torchCount = std::min((int)nearestTorchIndexes.size(), MAX_TORCH_LIGHTS);
+
+        glm::vec3 torchPositions[MAX_TORCH_LIGHTS];
+        glm::vec3 torchColors[MAX_TORCH_LIGHTS];
+        float torchRadii[MAX_TORCH_LIGHTS];
+
+        for (int i = 0; i < torchCount; i++) {
+            int torchIndex = nearestTorchIndexes[i];
+
+            float flicker =
+                0.92f
+                + 0.06f * sinf((float)glfwGetTime() * (9.0f + i))
+                + 0.04f * sinf((float)glfwGetTime() * (21.0f + i));
+
+            torchPositions[i] = gWallTorches[torchIndex].pos + glm::vec3(0.0f, 0.15f, 0.0f);
+
+            torchColors[i] = glm::vec3(1.35f, 0.55f, 0.18f) * flicker;
+
+            torchRadii[i] = 11.0f;
+        }
+
+        glUniform1i(gObjTorchCount, torchCount);
+
+        if (torchCount > 0) {
+            glUniform3fv(gObjTorchPos, torchCount, glm::value_ptr(torchPositions[0]));
+            glUniform3fv(gObjTorchColor, torchCount, glm::value_ptr(torchColors[0]));
+            glUniform1fv(gObjTorchRadius, torchCount, torchRadii);
+        }
+
+        glUniform1f(gObjAmbient, 0.25f);
 
         gHudPrompt.clear();
 
@@ -1483,7 +1739,10 @@ int Game_Run() {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, floorTexture);
 
-        glm::mat4 MVP = P * V * glm::mat4(1.0f);
+        glm::mat4 groundModel = glm::mat4(1.0f);
+        glm::mat4 MVP = P * V * groundModel;
+
+        glUniformMatrix4fv(gObjModel, 1, GL_FALSE, glm::value_ptr(groundModel));
         glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
 
         glBindVertexArray(ground.vao);
@@ -1496,7 +1755,10 @@ int Game_Run() {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, ceilingTexture);
 
-        glm::mat4 ceilingMVP = P * V * glm::mat4(1.0f);
+        glm::mat4 ceilingModel = glm::mat4(1.0f);
+        glm::mat4 ceilingMVP = P * V * ceilingModel;
+
+        glUniformMatrix4fv(gObjModel, 1, GL_FALSE, glm::value_ptr(ceilingModel));
         glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(ceilingMVP));
 
         glBindVertexArray(ceiling.vao);
@@ -1513,7 +1775,10 @@ int Game_Run() {
             glBindVertexArray(texturedBox.vao);
             for (const auto& M : mapMats) {
                 glm::mat4 MVP = P * V * M;
+
+                glUniformMatrix4fv(gObjModel, 1, GL_FALSE, glm::value_ptr(M));
                 glUniformMatrix4fv(gObjMVP, 1, GL_FALSE, glm::value_ptr(MVP));
+
                 glDrawArrays(GL_TRIANGLES, 0, texturedBox.count);
             }
             glBindVertexArray(0);
@@ -1543,6 +1808,15 @@ int Game_Run() {
             powerCellModel.yaw = (float)(glfwGetTime() * 70.0f);
             powerCellModel.render(V, P, gObjProg, gObjMVP, gObjTex);
         }
+
+        // Render wall torches
+        for (const auto& torch : gWallTorches) {
+            wallTorchModel.pos = torch.pos;
+            wallTorchModel.yaw = torch.yaw;
+            wallTorchModel.render(V, P, gObjProg, gObjMVP, gObjTex);
+        }
+
+        gGuard.render(V, P, gObjProg, gObjMVP, gObjTex);
 
         // Render exit door
         exitSignModel.pos = glm::vec3(exitGatePos.x, 0.0f, exitGatePos.z);
@@ -1679,7 +1953,8 @@ int Game_Run() {
 
     exitKeyModel.cleanup();
     powerCellModel.cleanup();
-    exitSignModel.cleanup();
+    wallTorchModel.cleanup();
+    gGuard.cleanup();
 
     for (auto& guard : gGuards) {
         guard.cleanup();
