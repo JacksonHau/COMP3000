@@ -99,6 +99,9 @@ std::string gHudPrompt;
 bool gHasPowerCell = false;
 bool gPowerCellUsed = false;
 
+const int MAX_TASER_AMMO = 10;
+int gTaserAmmo = MAX_TASER_AMMO;
+
 struct WallTorch {
     glm::vec3 pos;
     float yaw;
@@ -151,7 +154,6 @@ std::vector<LevelConfig> gLevels = {
 int  gCurrentLevel = 0;
 bool gShowLevelComplete = false;
 bool gShowFinalComic = false;
-GLuint gFinalComicTex = 0;
 
 std::string gLevelCompleteTitle = "LEVEL CLEARED";
 std::string gLevelCompletePrompt = "Press ENTER for next level";
@@ -205,8 +207,8 @@ void cursor_pos_callback(GLFWwindow*, double x, double y) {
         float scale = mapSize / (worldHalf * 2.0f);
 
         // Screen drag -> world offset
-        float dxWorld = (float)(-xoff) / scale; // drag right, world moves right visually
-        float dzWorld = (float)(yoff) / scale; // drag up, world moves up visually
+        float dxWorld = (float)(-xoff) / scale; 
+        float dzWorld = (float)(yoff) / scale; 
 
         gMapCenter.x += dxWorld;
         gMapCenter.y += dzWorld;
@@ -248,9 +250,15 @@ void toggleFullscreen() {
 void key_callback(GLFWwindow* w, int key, int, int action, int) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
 
-        // If fullscreen map is open → close map instead of quitting
+        // If fullscreen map is open, close map and resume gameplay
         if (gMapOpen) {
             gMapOpen = false;
+            gMapDragging = false;
+
+            gMouseLocked = true;
+            gFirstMouse = true;
+            glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
             return;
         }
 
@@ -265,13 +273,14 @@ void key_callback(GLFWwindow* w, int key, int, int action, int) {
 }
 
 void mouse_button_callback(GLFWwindow* w, int button, int action, int) {
-    // Left click to relock camera
+    // Left click to relock camera, but not while map is open
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
-        if (!gMouseLocked) {
+        if (!gMapOpen && !gMouseLocked) {
             gMouseLocked = true;
             gFirstMouse = true;
             double cx, cy; glfwGetCursorPos(w, &cx, &cy);
-            gLastX = cx; gLastY = cy;
+            gLastX = cx;
+            gLastY = cy;
             glfwSetInputMode(w, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     }
@@ -726,6 +735,16 @@ void stopFootstepSounds() {
     }
 }
 
+void stopChaseSound() {
+    if (gChaseSound) {
+        gChaseSound->stop();
+        gChaseSound->drop();
+        gChaseSound = nullptr;
+    }
+
+    gChaseSoundPlayed = false;
+}
+
 // ---------- Movement with jump + gravity + collision ----------
 void processMovement(float dt, const std::vector<AABB>& boxes) {
     bool sprinting =
@@ -832,6 +851,8 @@ void resetLevel(const glm::vec3& playerSpawn) {
 
     gHasPowerCell = false;
     gPowerCellUsed = false;
+
+    gTaserAmmo = MAX_TASER_AMMO;
 
     gChaseSoundPlayed = false;
 
@@ -1102,9 +1123,18 @@ int Game_Run() {
         powerCellModel.modelScale = 0.35f;
     }
 
+    // Load taser model
+    Guard taserModel;
+    if (!taserModel.loadModel("assets/taser.obj", "assets/textures/taser_mesh_taser_MAT_BaseColor_sRGB.png")) {
+        std::cerr << "Failed to load taser model\n";
+    }
+    else {
+        taserModel.modelScale = 15.0f;
+    }
+
     // Load wall torch model
     Guard wallTorchModel;
-    if (!wallTorchModel.loadModel("assets/torch.obj", "")) {
+    if (!wallTorchModel.loadModel("assets/torch.obj", "assets/textures/torch.png")) {
         std::cerr << "Failed to load wall torch model\n";
     }
     else {
@@ -1389,6 +1419,7 @@ int Game_Run() {
         if (gShowFinalComic) {
             if (pressed(gWindow, GLFW_KEY_R)) {
                 gCurrentLevel = 0;
+                gTaserAmmo = MAX_TASER_AMMO;
                 gShowFinalComic = false;
                 gGameWon = false;
                 loadCurrentGeneratedLevel();
@@ -1448,6 +1479,7 @@ int Game_Run() {
         if ((gGameOver || gGameWon) && pressed(gWindow, GLFW_KEY_R)) {
             if (gGameWon) {
                 gCurrentLevel = 0;
+                gTaserAmmo = MAX_TASER_AMMO;
             }
 
             loadCurrentGeneratedLevel();
@@ -1457,10 +1489,24 @@ int Game_Run() {
         if (pressed(gWindow, GLFW_KEY_M)) {
             gMapOpen = !gMapOpen;
 
-            // Fullscreen map should show the whole maze first
             if (gMapOpen) {
+                // Open map and pause gameplay
                 gMapCenter = glm::vec2(0.0f, 0.0f);
                 gMapZoom = 1.0f;
+
+                stopFootstepSounds();
+                stopChaseSound();
+
+                gMouseLocked = false;
+                glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            }
+            else {
+                // Close map and resume gameplay
+                gMapDragging = false;
+
+                gMouseLocked = true;
+                gFirstMouse = true;
+                glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             }
         }
 
@@ -1469,7 +1515,7 @@ int Game_Run() {
             processMovement(dt, colliders);
         }
 
-        if (!gGameOver && !gGameWon && !gShowLevelComplete && !gShowFinalComic) {
+        if (!gMapOpen && !gGameOver && !gGameWon && !gShowLevelComplete && !gShowFinalComic) {
             for (auto& guard : gGuards) {
                 guard.update(dt, gCam.pos, colliders);
             }
@@ -1483,7 +1529,7 @@ int Game_Run() {
             }
         }
 
-        if (!gGameOver && !gGameWon && anyGuardChasing && !gChaseSoundPlayed) {
+        if (!gMapOpen && !gGameOver && !gGameWon && anyGuardChasing && !gChaseSoundPlayed) {
             gChaseSoundPlayed = true;
 
             if (gSoundEngine) {
@@ -1497,8 +1543,14 @@ int Game_Run() {
         }
 
         // Guard catch check
-        if (!gGameOver && !gGameWon) {
+        if (!gMapOpen && !gGameOver && !gGameWon) {
             for (auto& guard : gGuards) {
+
+                // If the guard is stunned, touching them should not kill the player (GOT REALLY ANNOYED WHILE I WAS TESTING THIS LOL)
+                if (guard.stunned || guard.state == GuardState::Stunned) {
+                    continue;
+                }
+
                 glm::vec3 diff = guard.pos - gCam.pos;
                 float distXZ2 = diff.x * diff.x + diff.z * diff.z;
 
@@ -1592,7 +1644,7 @@ int Game_Run() {
             gHudPrompt = "Aim at guard and shoot";
         }
 
-        if (anyGuardChasing) {
+        if (!gMapOpen && anyGuardChasing) {
             gHudPrompt = "RUN!";
         }
 
@@ -1604,6 +1656,8 @@ int Game_Run() {
                 gHudToast.clear();
             }
         }
+
+        bool leftClickThisFrame = mousePressed(gWindow, GLFW_MOUSE_BUTTON_LEFT);
 
         // Exit key pickup
         if (!gMap.hasExitKey && gMap.exitKey.x > -1000) {
@@ -1620,76 +1674,99 @@ int Game_Run() {
             }
         }
 
-        // Power cell pickup
-        if (!gHasPowerCell && !gPowerCellUsed) {
+        // Power cell pickup gives +1 taser ammo, up to max
+        if (!gPowerCellUsed) {
             float dx = gCam.pos.x - powerCellPos.x;
             float dz = gCam.pos.z - powerCellPos.z;
             float dist2 = dx * dx + dz * dz;
 
             if (dist2 < 1.0f * 1.0f) {
-                gHasPowerCell = true;
+                if (gTaserAmmo < MAX_TASER_AMMO) {
+                    gTaserAmmo++;
+                    gPowerCellUsed = true;
+                    gHasPowerCell = false;
 
-                gHudToast = "Power Cell collected!";
-                gHudToastTimer = 2.0f;
+                    gHudToast = "Power Cell loaded. Taser ammo: " +
+                        std::to_string(gTaserAmmo) + "/" + std::to_string(MAX_TASER_AMMO);
 
-                if (gSoundEngine) {
-                    gSoundEngine->play2D("assets/audio/pick_up.wav", false);
+                    gHudToastTimer = 2.0f;
+
+                    if (gSoundEngine) {
+                        gSoundEngine->play2D("assets/audio/pick_up.wav", false);
+                    }
+                }
+                else {
+                    gHudToast = "Taser already fully charged.";
+                    gHudToastTimer = 1.5f;
                 }
             }
         }
 
-        // Use power cell
-        if (gHasPowerCell && !gPowerCellUsed && mousePressed(gWindow, GLFW_MOUSE_BUTTON_LEFT)) {
-            gHasPowerCell = false;
-            gPowerCellUsed = true;
+        // Shoot taser
+        if (!gMapOpen &&
+            !gGameOver &&
+            !gGameWon &&
+            !gShowLevelComplete &&
+            !gShowFinalComic &&
+            leftClickThisFrame) {
 
-            glm::vec3 camForward{
-                cosf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch)),
-                sinf(glm::radians(gCam.pitch)),
-                sinf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch))
-            };
-            camForward = glm::normalize(camForward);
-
-            int bestGuardIndex = -1;
-            float bestAimDot = 0.90f;
-
-            for (int i = 0; i < (int)gGuards.size(); i++) {
-                Guard& guard = gGuards[i];
-
-                if (guard.stunned) continue;
-
-                glm::vec3 guardTarget = guard.pos + glm::vec3(0.0f, 1.0f, 0.0f);
-                glm::vec3 toGuard = guardTarget - gCam.pos;
-                float distance = glm::length(toGuard);
-
-                if (distance <= 0.001f) continue;
-
-                toGuard = glm::normalize(toGuard);
-                float aimDot = glm::dot(camForward, toGuard);
-
-                if (distance < 10.0f && aimDot > bestAimDot) {
-                    bestAimDot = aimDot;
-                    bestGuardIndex = i;
-                }
-            }
-
-            if (bestGuardIndex != -1) {
-                Guard& targetGuard = gGuards[bestGuardIndex];
-
-                targetGuard.stunned = true;
-                targetGuard.stunTimer = 5.0f;
-                targetGuard.state = GuardState::Stunned;
-
-                gHudToast = "Guard stunned.";
-                gHudToastTimer = 2.0f;
-            }
-            else {
-                gHudToast = "Power Cell wasted.";
+            if (gTaserAmmo <= 0) {
+                gHudToast = "Taser empty. Find a Power Cell.";
                 gHudToastTimer = 1.5f;
             }
+            else {
+                gTaserAmmo--;
 
-            if (gSoundEngine) {
-                gSoundEngine->play2D("assets/audio/zap.wav", false);
+                glm::vec3 camForward{
+                    cosf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch)),
+                    sinf(glm::radians(gCam.pitch)),
+                    sinf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch))
+                };
+                camForward = glm::normalize(camForward);
+
+                int bestGuardIndex = -1;
+                float bestAimDot = 0.90f;
+
+                for (int i = 0; i < (int)gGuards.size(); i++) {
+                    Guard& guard = gGuards[i];
+
+                    if (guard.stunned) continue;
+
+                    glm::vec3 guardTarget = guard.pos + glm::vec3(0.0f, 1.0f, 0.0f);
+                    glm::vec3 toGuard = guardTarget - gCam.pos;
+                    float distance = glm::length(toGuard);
+
+                    if (distance <= 0.001f) continue;
+
+                    toGuard = glm::normalize(toGuard);
+                    float aimDot = glm::dot(camForward, toGuard);
+
+                    if (distance < 14.0f && aimDot > bestAimDot) {
+                        bestAimDot = aimDot;
+                        bestGuardIndex = i;
+                    }
+                }
+
+                if (bestGuardIndex != -1) {
+                    Guard& targetGuard = gGuards[bestGuardIndex];
+
+                    targetGuard.stunned = true;
+                    targetGuard.stunTimer = 5.0f;
+                    targetGuard.state = GuardState::Stunned;
+
+                    gHudToast = "Guard stunned. Ammo: " +
+                        std::to_string(gTaserAmmo) + "/" + std::to_string(MAX_TASER_AMMO);
+                }
+                else {
+                    gHudToast = "Taser missed. Ammo: " +
+                        std::to_string(gTaserAmmo) + "/" + std::to_string(MAX_TASER_AMMO);
+                }
+
+                gHudToastTimer = 1.8f;
+
+                if (gSoundEngine) {
+                    gSoundEngine->play2D("assets/audio/zap.wav", false);
+                }
             }
         }
 
@@ -1725,9 +1802,16 @@ int Game_Run() {
                     gShowLevelComplete = true;
                 }
                 else {
+                    // Finished Level 4, show final comic panel
                     gGameWon = true;
-                    gHudToast = "All sectors cleared.";
-                    gHudToastTimer = 2.0f;
+                    gShowFinalComic = true;
+                    gShowLevelComplete = false;
+
+                    gMouseLocked = false;
+                    glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+                    gHudToast.clear();
+                    gHudToastTimer = 0.0f;
                 }
             }
         }
@@ -1803,7 +1887,7 @@ int Game_Run() {
         }
 
         // Render power cell if not collected yet
-        if (!gHasPowerCell && !gPowerCellUsed) {
+        if (!gPowerCellUsed) {
             powerCellModel.pos = glm::vec3(powerCellPos.x, 0.5f, powerCellPos.z);
             powerCellModel.yaw = (float)(glfwGetTime() * 70.0f);
             powerCellModel.render(V, P, gObjProg, gObjMVP, gObjTex);
@@ -1827,6 +1911,28 @@ int Game_Run() {
             guard.render(V, P, gObjProg, gObjMVP, gObjTex);
         }
 
+        // Render taser in player's right hand
+        if (!gMapOpen && !gGameOver && !gGameWon && !gShowLevelComplete && !gShowFinalComic) {
+            glm::vec3 camForward{
+                cosf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch)),
+                sinf(glm::radians(gCam.pitch)),
+                sinf(glm::radians(gCam.yaw)) * cosf(glm::radians(gCam.pitch))
+            };
+            camForward = glm::normalize(camForward);
+
+            glm::vec3 camRight = glm::normalize(glm::cross(camForward, glm::vec3(0.0f, 1.0f, 0.0f)));
+
+            taserModel.pos =
+                gCam.pos
+                + camForward * 0.5f
+                + camRight * 0.45f
+                + glm::vec3(0.0f, -0.42f, 0.0f);
+
+            taserModel.yaw = -gCam.yaw + 90.0f;
+
+            taserModel.render(V, P, gObjProg, gObjMVP, gObjTex);
+        }
+
         // Crosshair
         drawCrosshairNDC(fbw, fbh);
 
@@ -1834,7 +1940,7 @@ int Game_Run() {
             ? glm::vec3(9999.0f, 0.0f, 9999.0f)
             : exitKeyPos;
 
-        glm::vec3 displayPowerCellPos = (gHasPowerCell || gPowerCellUsed)
+        glm::vec3 displayPowerCellPos = gPowerCellUsed
             ? glm::vec3(9999.0f, 0.0f, 9999.0f)
             : powerCellPos;
 
@@ -1869,6 +1975,11 @@ int Game_Run() {
                 mapGuardPositions
             );
         }
+
+        std::string ammoText = "TASER: " + std::to_string(gTaserAmmo) + "/" + std::to_string(MAX_TASER_AMMO);
+
+        drawTextScreen(ammoText, 30.0f, 90.0f, fbw, fbh,
+            glm::vec3(1.0f, 0.85f, 0.25f), 2.2f);
 
         // HUD text
         if (!gHudPrompt.empty()) {
@@ -1905,7 +2016,7 @@ int Game_Run() {
                 glm::vec3(1.0f, 1.0f, 1.0f), 2.5f);
         }
 
-        if (gGameWon) {
+        if (gGameWon && !gShowFinalComic) {
             float titleY = fbh * 0.38f;
             float titleX = fbw * 0.5f - (gWinText.size() * 10.0f);
 
@@ -1954,6 +2065,7 @@ int Game_Run() {
     exitKeyModel.cleanup();
     powerCellModel.cleanup();
     wallTorchModel.cleanup();
+    taserModel.cleanup();
     gGuard.cleanup();
 
     for (auto& guard : gGuards) {
