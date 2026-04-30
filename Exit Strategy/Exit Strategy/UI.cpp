@@ -554,7 +554,7 @@ void drawFullscreenMap(const std::vector<AABB>& colliders, size_t mapColliderCou
     }
 
     // Hint text (can stay top-left)
-    drawTextScreen("RMB drag to pan  |  Scroll to zoom  |  Press M to close map",
+    drawTextScreen("Scroll to zoom  |  Press M to close map",
         40, 40, fbw, fbh,
         glm::vec3(1.0f, 1.0f, 1.0f), 2.0f);
 
